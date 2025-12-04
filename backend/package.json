@@ -1,0 +1,19 @@
+{
+  "name": "tdownloader-backend",
+  "version": "1.0.0",
+  "description": "Backend for TDownloader using TDLib",
+  "main": "server.ts",
+  "scripts": {
+    "start": "ts-node server.ts"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.5",
+    "tdl": "^7.4.0",
+    "tdl-tdlib-addon": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
