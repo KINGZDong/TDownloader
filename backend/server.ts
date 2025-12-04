@@ -1,10 +1,19 @@
-import { Client } from 'tdl';
+import { createRequire } from 'module';
 import { TDLib } from 'tdl-tdlib-addon';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
+import process from 'node:process';
+
+// Shim for __dirname in ESM environment
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const require = createRequire(import.meta.url);
+const { Client } = require('tdl');
 
 // --- 配置区域 ---
 // 1. 获取 API ID 和 Hash: https://my.telegram.org
