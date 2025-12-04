@@ -1,0 +1,5 @@
+{
+  "name": "TDownloader",
+  "description": "A powerful local Telegram file manager and downloader using TDLib. Features advanced filtering, batch downloading, and network proxy support.",
+  "requestFramePermissions": []
+}
