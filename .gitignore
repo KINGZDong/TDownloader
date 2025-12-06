@@ -34,5 +34,7 @@ backend/_td_database/
 # 忽略用户上传的媒体/文件目录
 # Git 会忽略 backend/td_files/photos 目录下的所有内容
 backend/_td_files/photos/
+# Git 会忽略 backend/td_files/videos 目录下的所有内容
+backend/_td_files/videos/
 # Git 会忽略 backend\_td_files\temp 目录下的所有内容
 backend/_td_files/temp/
