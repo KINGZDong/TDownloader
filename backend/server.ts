@@ -8,6 +8,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import process from 'node:process';
 import { exec } from 'child_process';
+import 'dotenv/config'; // Load .env file
 
 // Shim for __dirname in ESM environment
 const __filename = fileURLToPath(import.meta.url);
@@ -17,8 +18,18 @@ const require = createRequire(import.meta.url);
 const { Client } = require('tdl');
 
 // --- 配置区域 ---
-const API_ID = 20293998; 
-const API_HASH = 'c02157796d88835821d3f25c739d2906';
+const API_ID = Number(process.env.API_ID);
+const API_HASH = process.env.API_HASH;
+
+if (!API_ID || !API_HASH) {
+  console.error('\n==================================================');
+  console.error('❌ 错误: 未在 .env 文件中找到 API_ID 或 API_HASH');
+  console.error('请确保根目录下存在 .env 文件并包含以下内容:');
+  console.error('API_ID=your_api_id');
+  console.error('API_HASH=your_api_hash');
+  console.error('==================================================\n');
+  process.exit(1);
+}
 
 // 2. 自动检测系统平台以加载对应的库文件
 const platform = os.platform();

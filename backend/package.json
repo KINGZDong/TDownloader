@@ -10,7 +10,8 @@
   "dependencies": {
     "socket.io": "^4.7.5",
     "tdl": "^7.4.0",
-    "tdl-tdlib-addon": "^1.0.0"
+    "tdl-tdlib-addon": "^1.0.0",
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
