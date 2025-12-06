@@ -18,7 +18,12 @@ const require = createRequire(import.meta.url);
 const { Client } = require('tdl');
 
 // --- 0. 防止进程崩溃的关键代码 ---
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason: any, promise) => {
+  // 忽略 "Request aborted" 错误，这是在 client.close() 时中断请求产生的正常行为
+  if (reason && (reason.message === 'Request aborted' || reason.code === 500)) {
+      return; 
+  }
+  
   console.error('⚠️ 警告: 捕获到未处理的 Promise 拒绝 (通常是 TDLib 网络错误)');
   console.error('原因:', reason);
   // 不要退出进程，保持服务器运行以便接收代理配置
@@ -166,7 +171,9 @@ async function initializeClient(sessionId: string) {
         console.log('🔄 Closing previous client...');
         try {
             await client.close(); // Graceful close
-        } catch (e) { console.error('Error closing client:', e); }
+        } catch (e) { 
+            // Ignore close errors
+        }
         client = null;
         activeDownloads.clear();
     }
@@ -183,6 +190,11 @@ async function initializeClient(sessionId: string) {
         databaseDirectory: dbDir,
         filesDirectory: FILES_DIR, // Share files dir to save space
     });
+    
+    // Silence internal C++ logs (State 1 messages)
+    try {
+        await client.invoke({ _: 'setLogVerbosityLevel', new_verbosity_level: 1 });
+    } catch {}
 
     // 3. Setup Listeners
     client.on('error', (err: any) => {
@@ -566,7 +578,10 @@ io.on('connection', (socket) => {
             const chatsPromises = result.chat_ids.map((id: number) => client.invoke({ _: 'getChat', chat_id: id }));
             const chatsRaw = await Promise.all(chatsPromises);
             socket.emit('chats_update', chatsRaw.map(mapChat));
-        } catch (e) { console.error(e); }
+        } catch (e: any) { 
+            // Better error handling for 404/Not Found
+            console.error('Failed to load chats:', e?.message || e);
+        }
     });
 
     socket.on('get_files', async (params) => {
@@ -671,7 +686,8 @@ io.on('connection', (socket) => {
     socket.on('download_file', async (p) => { 
         if(client) {
             activeDownloads.set(p.fileId, { fileName: p.fileName, totalSize: p.totalSize, startTime: Date.now(), lastDownloadedSize: 0, lastUpdateTime: Date.now(), speed: 0, status: 'pending' });
-            client.invoke({ _: 'downloadFile', file_id: p.fileId, priority: 1, offset: 0, limit: 0, synchronous: false }).catch(console.error);
+            client.invoke({ _: 'downloadFile', file_id: p.fileId, priority: 1, offset: 0, limit: 0, synchronous: false })
+            .catch((e: any) => console.error('Download start error:', e?.message || e));
         }
     });
     socket.on('cancel_download', async (fileId) => {
