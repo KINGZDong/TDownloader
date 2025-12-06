@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+backend/_td_database/
+backend/_td_files/
+.env
+*.dll
