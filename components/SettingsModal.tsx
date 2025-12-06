@@ -13,7 +13,7 @@ interface SettingsModalProps {
 // --- INTERNAL COMPONENT: PROXY SETTINGS ---
 const ProxySettings: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [proxyConfig, setProxyConfig] = useState<ProxyConfig>({
-    enabled: true,
+    enabled: false,
     type: 'socks5',
     host: '127.0.0.1',
     port: 7890,
@@ -21,7 +21,21 @@ const ProxySettings: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     password: '',
   });
 
+  // Load from localStorage on mount
+  useEffect(() => {
+    try {
+        const saved = localStorage.getItem('td_proxy_config');
+        if (saved) {
+            setProxyConfig(JSON.parse(saved));
+        }
+    } catch (e) { console.error('Error loading proxy config', e); }
+  }, []);
+
   const handleSave = () => {
+    // Save to localStorage for persistence across reloads
+    localStorage.setItem('td_proxy_config', JSON.stringify(proxyConfig));
+    
+    // Send to backend
     api.setProxy(proxyConfig);
     onClose();
   };

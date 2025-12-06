@@ -126,8 +126,8 @@ class ApiService {
     this.socket.emit('get_chats');
   }
 
-  async getFiles(chatId: number, startDate?: number, endDate?: number): Promise<void> {
-    this.socket.emit('get_files', { chatId, startDate, endDate });
+  async getFiles(chatId: number, startDate?: number, endDate?: number, limit?: number): Promise<void> {
+    this.socket.emit('get_files', { chatId, startDate, endDate, limit });
   }
 
   async setProxy(config: ProxyConfig): Promise<void> {

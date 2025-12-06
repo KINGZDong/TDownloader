@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TdFile, FileType, Chat } from '../types';
-import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal } from 'lucide-react';
+import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal, Layers, AlertCircle, X } from 'lucide-react';
 import { api } from '../services/api';
 
 interface FileBrowserProps {
@@ -217,6 +217,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [files, setFiles] = useState<TdFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState({ scanned: 0, found: 0, active: false });
+  const [isLimited, setIsLimited] = useState(true);
   
   // Filters
   const [filterType, setFilterType] = useState<FileType>(FileType.ALL);
@@ -230,46 +231,68 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   const activeChat = chats.find(c => c.id === chatId);
 
-  // Trigger scanning when Chat ID or Dates change
-  // We use a debounce or direct call logic. Since users might type slowly, 
-  // we only trigger date scan when valid dates are formed or button pressed.
-  // For now, let's trigger when full date is entered or on 'Enter' (but we have custom inputs).
-  // Better approach: Add a "Scan" button if dates are present, or Auto-scan if dates are valid.
-  // Given user UX requirement "Smart Scan", let's auto-scan when dates are valid enough.
-  
-  const fetchFiles = () => {
+  const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number) => {
       if (!chatId) return;
       
       setLoading(true);
       setFiles([]); 
       setSelectedFiles([]);
       setScanStatus({ scanned: 0, found: 0, active: true });
+      
+      let startTs = customStart;
+      let endTs = customEnd;
 
-      let startTs: number | undefined = undefined;
-      let endTs: number | undefined = undefined;
-
-      if (startD.y && startD.m && startD.d && startD.y.length===4 && startD.m.length===2 && startD.d.length===2) {
+      // If no custom dates passed, try to read from state
+      if (startTs === undefined && startD.y && startD.m && startD.d && startD.y.length===4 && startD.m.length===2 && startD.d.length===2) {
            startTs = Math.floor(new Date(parseInt(startD.y), parseInt(startD.m)-1, parseInt(startD.d)).getTime() / 1000);
       }
-      if (endD.y && endD.m && endD.d && endD.y.length===4 && endD.m.length===2 && endD.d.length===2) {
+      if (endTs === undefined && endD.y && endD.m && endD.d && endD.y.length===4 && endD.m.length===2 && endD.d.length===2) {
            endTs = Math.floor(new Date(parseInt(endD.y), parseInt(endD.m)-1, parseInt(endD.d), 23, 59, 59).getTime() / 1000);
       }
+
+      // Logic:
+      // 1. If forceAll is true -> Limit 0 (Unlimited)
+      // 2. If dates are provided (filtered) -> Limit 0 (Unlimited)
+      // 3. Default -> Limit 500
       
-      api.getFiles(chatId, startTs, endTs);
+      const hasDateFilter = startTs !== undefined || endTs !== undefined;
+      const limit = (forceAll || hasDateFilter) ? 0 : 500;
+      
+      setIsLimited(limit > 0);
+      
+      api.getFiles(chatId, startTs, endTs, limit);
   };
 
   useEffect(() => {
-    // Only auto-fetch if NO dates are set (initial load), OR if chatId changes.
-    // If dates are partially set, we wait.
-    // If dates change fully, we trigger fetch.
-    
-    const startValid = !startD.y || (startD.y.length===4 && startD.m.length===2 && startD.d.length===2);
-    const endValid = !endD.y || (endD.y.length===4 && endD.m.length===2 && endD.d.length===2);
-
-    if (chatId && startValid && endValid) {
-        fetchFiles();
+    // When Chat ID changes, we do a default fetch (Limited 500, no date filters)
+    // We also want to reset the date inputs to avoid confusion, or keep them?
+    // User expectation usually: switch chat -> see recent files.
+    if (chatId) {
+        // Reset dates visual state? Optional. Let's keep them but NOT use them unless user explicitly asks?
+        // Actually, if dates are set, user probably expects them to apply to new chat.
+        // But the requirement says "Limit 500 is only when clicking the group". 
+        // This implies resetting to "Default View".
+        
+        // Let's reset dates for a fresh start in new chat
+        setStartD({y: '', m: '', d: ''});
+        setEndD({y: '', m: '', d: ''});
+        
+        // Fetch with default 500 limit
+        fetchFiles(false, undefined, undefined);
     }
-  }, [chatId, startD, endD]); // Auto-re-fetch when dates become valid
+  }, [chatId]); 
+
+  // Auto-fetch when dates become valid
+  useEffect(() => {
+      const startValid = startD.y.length===4 && startD.m.length===2 && startD.d.length===2;
+      const endValid = endD.y.length===4 && endD.m.length===2 && endD.d.length===2;
+      
+      // Only auto-trigger if BOTH are set (range) or strictly valid dates
+      if (chatId && startValid && endValid) {
+          fetchFiles(false); // fetchFiles logic will see the dates and set limit to 0
+      }
+  }, [startD, endD]);
+
 
   useEffect(() => {
       // Setup listeners
@@ -316,8 +339,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
     const groups: Record<string, { id: string, files: TdFile[], text?: string, date: number }> = {};
     
     filtered.forEach(file => {
-        // Prefer groupId (media_album_id), fallback to messageId
-        // If groupId is '0', it's not an album, so allow grouping by messageId
         const key = (file.groupId && file.groupId !== '0') ? file.groupId : String(file.messageId);
         
         if (!groups[key]) {
@@ -329,7 +350,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
             };
         }
         
-        // Use the longest text found in the group (usually same for all, or on first item)
         if (file.text && (!groups[key].text || file.text.length > groups[key].text!.length)) {
             groups[key].text = file.text;
         }
@@ -337,7 +357,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         groups[key].files.push(file);
     });
 
-    // Sort groups by date descending
     return Object.values(groups).sort((a, b) => b.date - a.date);
   }, [files, filterType, searchQuery, minSize]);
 
@@ -351,7 +370,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   };
 
   const handleSelectAll = () => {
-    // Select all files visible in groupedMessages
     const allVisibleIds = groupedMessages.flatMap(g => g.files.map(f => f.id));
     
     if (selectedFiles.length === allVisibleIds.length && allVisibleIds.length > 0) {
@@ -369,6 +387,13 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       }
     });
     setSelectedFiles([]);
+  };
+
+  const handleClearDates = () => {
+      setStartD({y: '', m: '', d: ''});
+      setEndD({y: '', m: '', d: ''});
+      // Fetch default 500 when clearing dates?
+      fetchFiles(false, undefined, undefined);
   };
 
   if (!chatId) {
@@ -390,13 +415,21 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         <div className="flex justify-between items-center mb-6">
           <div className="flex items-center gap-3">
              <div>
-                <h2 className="text-2xl font-bold text-slate-100 tracking-tight">{activeChat?.title}</h2>
+                <h2 className="text-2xl font-bold text-slate-100 tracking-tight flex items-center gap-3">
+                    {activeChat?.title}
+                    {isLimited && !loading && (
+                        <div className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                            <AlertCircle size={10} />
+                            LIMIT 500
+                        </div>
+                    )}
+                </h2>
                 <div className="flex gap-2 text-sm text-slate-500 mt-1 items-center">
-                    <span className="font-medium text-slate-400">{groupedMessages.length}</span> messages found
+                    <span className="font-medium text-slate-400">{groupedMessages.length}</span> messages shown
                     {scanStatus.active && (
                         <div className="flex items-center gap-1.5 ml-2 text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full animate-pulse">
                             <Loader2 size={10} className="animate-spin" />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">Scanning History...</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider">Scanning...</span>
                         </div>
                     )}
                 </div>
@@ -443,11 +476,31 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
               ))}
             </div>
             
-            {/* Custom Manual Date Picker */}
+            {/* Custom Manual Date Picker + Fetch All */}
             <div className="flex items-center gap-2">
-                <DateInput label="Start" value={startD} onChange={setStartD} />
-                <span className="text-slate-600">-</span>
-                <DateInput label="End" value={endD} onChange={setEndD} />
+                <div className="flex items-center gap-2 relative">
+                    <DateInput label="Start" value={startD} onChange={setStartD} />
+                    <span className="text-slate-600">-</span>
+                    <DateInput label="End" value={endD} onChange={setEndD} />
+                    {(startD.y || endD.y) && (
+                        <button 
+                            onClick={handleClearDates}
+                            className="absolute -right-6 text-slate-600 hover:text-slate-400"
+                            title="Clear Dates"
+                        >
+                            <X size={14} />
+                        </button>
+                    )}
+                </div>
+                
+                <button 
+                  onClick={() => fetchFiles(true)}
+                  className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 p-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-sm ml-4"
+                  title="Ignore limits and fetch complete history"
+                >
+                    <Layers size={16} />
+                    <span className="text-xs font-bold px-1">Load All</span>
+                </button>
             </div>
           </div>
 
@@ -488,6 +541,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
           <div className="flex flex-col justify-center items-center h-64 animate-fade-in">
             <div className="animate-spin rounded-full h-10 w-10 border-4 border-slate-800 border-t-blue-600 mb-4"></div>
             <p className="text-slate-500 font-medium">Scanning chat history...</p>
+            {isLimited && <p className="text-slate-600 text-xs mt-2">Fetching recent 500 files</p>}
           </div>
         ) : groupedMessages.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center h-96 text-slate-500 animate-fade-in">
@@ -515,6 +569,20 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
                     <span className="text-sm font-medium">Scanning for more messages...</span>
                 </div>
             )}
+            
+            {/* Limit reached indicator at bottom */}
+            {!loading && isLimited && (
+                <div className="py-8 flex flex-col justify-center items-center gap-2 text-slate-500 border-t border-slate-800/50 mt-4 pt-8">
+                     <AlertCircle size={24} className="text-slate-600" />
+                     <p className="text-sm font-medium">Showing recent 500 files</p>
+                     <button 
+                        onClick={() => fetchFiles(true)}
+                        className="text-blue-400 hover:text-blue-300 text-xs font-bold uppercase tracking-wider hover:underline"
+                     >
+                        Click here to Load All History
+                     </button>
+                </div>
+            )}
           </>
         )}
       </div>
@@ -531,6 +599,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
                  <span><span className="text-blue-400 font-bold">{scanStatus.scanned}</span> analyzed</span>
                  <span className="text-slate-600">•</span>
                  <span><span className="text-emerald-400 font-bold">{scanStatus.found}</span> found</span>
+                 {isLimited && <span className="text-amber-500/50 ml-2 text-[10px] uppercase font-bold tracking-wider">Limit: 500</span>}
              </div>
          </div>
       )}

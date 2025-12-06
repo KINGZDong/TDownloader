@@ -23,6 +23,14 @@ const App: React.FC = () => {
       console.log('Backend connection:', connected);
       if (connected) {
          api.checkAuthStatus();
+         
+         // Re-apply proxy settings from local storage if available
+         try {
+             const savedProxy = localStorage.getItem('td_proxy_config');
+             if (savedProxy) {
+                 api.setProxy(JSON.parse(savedProxy));
+             }
+         } catch(e) { console.error('Error loading proxy', e); }
       }
     });
 
