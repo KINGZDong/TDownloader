@@ -17,6 +17,18 @@ const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const { Client } = require('tdl');
 
+// --- 0. 防止进程崩溃的关键代码 ---
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ 警告: 捕获到未处理的 Promise 拒绝 (通常是 TDLib 网络错误)');
+  console.error('原因:', reason);
+  // 不要退出进程，保持服务器运行以便接收代理配置
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('⚠️ 警告: 捕获到未处理的异常');
+    console.error(error);
+});
+
 // --- 配置区域 ---
 const API_ID = Number(process.env.API_ID);
 const API_HASH = process.env.API_HASH;
@@ -173,7 +185,9 @@ async function initializeClient(sessionId: string) {
     });
 
     // 3. Setup Listeners
-    client.on('error', console.error);
+    client.on('error', (err: any) => {
+        console.error('TDLib Client Error:', err);
+    });
 
     client.on('update', (update: any) => {
         // Auth State
@@ -219,8 +233,13 @@ async function initializeClient(sessionId: string) {
         }
     });
 
-    // 4. Connect
-    await client.connect();
+    // 4. Connect (Safe Wrap)
+    try {
+        await client.connect();
+    } catch (e) {
+        console.error("❌ TDLib connect error (Likely network issue, waiting for proxy...):", e);
+        // Do NOT re-throw. We want the server to stay alive so socket.io can receive set_proxy.
+    }
 }
 
 // --- File Handling Helper (Moved from previous listener) ---
@@ -562,11 +581,51 @@ io.on('connection', (socket) => {
     // Proxy (Apply to current client if exists)
     socket.on('set_proxy', async (config) => {
         if (!client) return; 
-        // ... (Keep existing proxy logic, just use `client`)
-        try { await client.invoke({ _: 'disableProxy' }); } catch {}
+        
+        // 1. Disable existing proxy
+        try { 
+            await client.invoke({ _: 'disableProxy' }); 
+            console.log('Old proxy disabled');
+        } catch(e) { console.error('Error disabling proxy', e); }
+
         if (!config.enabled) return;
-        // ... construct typeClass ...
-        // await client.invoke({ _: 'addProxy', ... });
+
+        // 2. Build new proxy type
+        let typeClass: any;
+        if (config.type === 'socks5') {
+            typeClass = {
+                _: 'proxyTypeSocks5',
+                username: config.username || '',
+                password: config.password || ''
+            };
+        } else if (config.type === 'http') {
+            typeClass = {
+                _: 'proxyTypeHttp',
+                username: config.username || '',
+                password: config.password || '',
+                http_only: false // usually supports https too
+            };
+        } else if (config.type === 'mtproto') {
+            typeClass = {
+                _: 'proxyTypeMtproto',
+                secret: config.secret || ''
+            };
+        }
+
+        // 3. Add new proxy
+        try {
+            console.log(`Setting proxy: ${config.type}://${config.host}:${config.port}`);
+            await client.invoke({
+                _: 'addProxy',
+                server: config.host,
+                port: config.port,
+                enable: true,
+                type: typeClass
+            });
+            console.log('✅ Proxy applied successfully!');
+        } catch (e) {
+            console.error('❌ Failed to set proxy:', e);
+        }
     });
 });
 
