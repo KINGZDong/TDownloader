@@ -318,10 +318,11 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       let endTs = customEnd;
 
       // If no custom dates passed, try to read from state
-      if (startTs === undefined && startD.y && startD.m && startD.d && startD.y.length===4 && startD.m.length===2 && startD.d.length===2) {
+      // FIX: Relaxed validation. Allow length >= 1 for month/day.
+      if (startTs === undefined && startD.y.length === 4 && startD.m && startD.d) {
            startTs = Math.floor(new Date(parseInt(startD.y), parseInt(startD.m)-1, parseInt(startD.d)).getTime() / 1000);
       }
-      if (endTs === undefined && endD.y && endD.m && endD.d && endD.y.length===4 && endD.m.length===2 && endD.d.length===2) {
+      if (endTs === undefined && endD.y.length === 4 && endD.m && endD.d) {
            endTs = Math.floor(new Date(parseInt(endD.y), parseInt(endD.m)-1, parseInt(endD.d), 23, 59, 59).getTime() / 1000);
       }
 
@@ -351,13 +352,14 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   // Auto-fetch when dates become valid
   useEffect(() => {
-      const startValid = startD.y.length===4 && startD.m.length===2 && startD.d.length===2;
-      const endValid = endD.y.length===4 && endD.m.length===2 && endD.d.length===2;
+      // FIX: Relaxed validation to trigger when Year is 4 digits and Month/Day are at least 1 digit
+      const startValid = startD.y.length === 4 && startD.m.length >= 1 && startD.d.length >= 1;
+      const endValid = endD.y.length === 4 && endD.m.length >= 1 && endD.d.length >= 1;
       
       if (chatId && startValid && endValid) {
           fetchFiles(false); 
       }
-  }, [startD, endD]);
+  }, [startD, endD, chatId]);
 
 
   useEffect(() => {
