@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+
+dotenv.config();
 import { createRequire } from 'module';
 import { TDLib } from 'tdl-tdlib-addon';
 import { Server } from 'socket.io';
@@ -8,6 +11,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import process from 'node:process';
 import { exec } from 'child_process';
+
 
 // Shim for __dirname in ESM environment
 const __filename = fileURLToPath(import.meta.url);

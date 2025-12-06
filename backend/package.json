@@ -8,6 +8,7 @@
     "start": "ts-node --esm server.ts"
   },
   "dependencies": {
+    "dotenv": "^17.2.3",
     "socket.io": "^4.7.5",
     "tdl": "^7.4.0",
     "tdl-tdlib-addon": "^1.0.0"
