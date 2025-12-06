@@ -307,7 +307,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   const activeChat = chats.find(c => c.id === chatId);
 
-  const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number, overrideQuery?: string) => {
+  const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number, overrideQuery?: string, overrideType?: FileType) => {
       if (!chatId) return;
       
       setLoading(true);
@@ -327,6 +327,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       }
       
       const queryToUse = overrideQuery !== undefined ? overrideQuery : activeSearchQuery;
+      const typeToUse = overrideType !== undefined ? overrideType : filterType;
 
       // Logic:
       // 1. If forceAll is true -> Limit 0 (Unlimited)
@@ -336,14 +337,14 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       
       const hasDateFilter = startTs !== undefined || endTs !== undefined;
       const hasSearch = queryToUse.length > 0;
-      const hasTypeFilter = filterType !== FileType.ALL;
+      const hasTypeFilter = typeToUse !== FileType.ALL;
 
       const limit = (forceAll || hasDateFilter || hasSearch || hasTypeFilter) ? 0 : 500;
       
       setIsLimited(limit > 0);
       
       // We pass the filter type and search query to backend now
-      api.getFiles(chatId, startTs, endTs, limit, queryToUse, filterType);
+      api.getFiles(chatId, startTs, endTs, limit, queryToUse, typeToUse);
   };
   
   const handleManualSearch = () => {
@@ -367,8 +368,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         setActiveSearchQuery('');
         setFilterType(FileType.ALL);
         
-        // Fetch with default 500 limit
-        fetchFiles(false, undefined, undefined, '');
+        // Fetch with default 500 limit, explicitly overriding type and query to avoid stale state
+        fetchFiles(false, undefined, undefined, '', FileType.ALL);
     }
   }, [chatId]); 
 
