@@ -104,6 +104,12 @@ function mapMessageToFile(message: any): any | null {
   let fileData = null;
   let fileType = 'Document';
   let thumbnail = null;
+  let text = '';
+
+  // Extract Caption if available
+  if (content.caption && content.caption.text) {
+      text = content.caption.text;
+  }
 
   if (content._ === 'messagePhoto') {
     const photo = content.photo.sizes[content.photo.sizes.length - 1];
@@ -130,8 +136,11 @@ function mapMessageToFile(message: any): any | null {
 
   return {
     id: fileData.id,
+    messageId: message.id,
+    groupId: message.media_album_id || '0', // Grouping ID
     uniqueId: fileData.remote.unique_id,
     name: content.document?.file_name || content.video?.file_name || content.audio?.file_name || `file_${fileData.id}.${fileType === 'Image' ? 'jpg' : 'dat'}`,
+    text: text, // Caption
     size: fileData.expected_size,
     date: message.date,
     type: fileType,
@@ -397,17 +406,44 @@ io.on('connection', (socket) => {
     } catch (e) { console.error('Get chats error', e); }
   });
 
-  // --- REWRITTEN GET_FILES WITH INFINITE LOOP AND PROGRESS ---
-  socket.on('get_files', async (chatId) => {
+  // --- REWRITTEN GET_FILES WITH SMART DATE SEEKING ---
+  socket.on('get_files', async (params) => {
+    // params can be just chatId (legacy) or object { chatId, startDate?, endDate? }
+    const chatId = typeof params === 'object' ? params.chatId : params;
+    const startDate = typeof params === 'object' ? params.startDate : undefined; // Timestamp (seconds)
+    const endDate = typeof params === 'object' ? params.endDate : undefined; // Timestamp (seconds)
+
     try {
-      let lastMessageId = 0;
+      let lastMessageId = 0; // Default to latest
       let totalFetched = 0;
       let totalFoundFiles = 0;
-      const BATCH_SIZE = 100; // Telegram API limit per request
+      const BATCH_SIZE = 100;
 
-      console.log(`🚀 Starting full scan for chat ${chatId}`);
+      console.log(`🚀 Starting smart scan for chat ${chatId}. Range: ${startDate ? new Date(startDate * 1000).toISOString() : 'Start'} -> ${endDate ? new Date(endDate * 1000).toISOString() : 'Now'}`);
+      
       // Notify client scan is starting
       socket.emit('scan_progress', { scanned: 0, found: 0, active: true });
+
+      // 1. SEEKING LOGIC: If we have an endDate (which is the "latest" time in our range), we find the message ID there.
+      if (endDate) {
+          try {
+             // getMessageByDate returns a message ID closer to that date
+             const seekMsg = await client.invoke({
+                 _: 'getMessageByDate',
+                 chat_id: chatId,
+                 date: endDate
+             });
+             // Note: getMessageByDate returns a message. We use its ID as the starting point.
+             // If the message returned is actually *after* our endDate (which can happen), we rely on the loop filtering.
+             // But usually it's correct.
+             if (seekMsg && seekMsg.id) {
+                 lastMessageId = seekMsg.id;
+                 console.log(`📍 Seeked to message ID ${lastMessageId} for date ${new Date(endDate * 1000).toLocaleDateString()}`);
+             }
+          } catch (e) {
+              console.warn('Seek failed, starting from newest', e);
+          }
+      }
 
       while (true) {
           const history = await client.invoke({
@@ -420,36 +456,56 @@ io.on('connection', (socket) => {
           });
 
           if (!history.messages || history.messages.length === 0) {
-              console.log(`✅ Scan finished for chat ${chatId}. Total messages processed: ${totalFetched}`);
-              break; // No more messages
+              console.log(`✅ Scan finished (end of history). Total processed: ${totalFetched}`);
+              break; 
           }
 
-          const filesBatch = history.messages.map(mapMessageToFile).filter(f => f !== null);
+          // 2. STOPPING LOGIC: If we hit messages older than startDate, we stop.
+          // Note: history is returned ordered from new to old.
+          const oldestInBatch = history.messages[history.messages.length - 1];
+          if (startDate && oldestInBatch.date < startDate) {
+             // The batch goes beyond our start date. We still need to process items in this batch that match, then break.
+             // Filter logic below handles the specific items. We just need to know if we should break after this batch.
+             // Actually, let's process the batch and break if the *newest* in batch is already too old (unlikely if loop is correct),
+             // or check specifically inside mapping.
+             // Simplest: Process batch, then break loop.
+          }
+          
+          // Filter out files not in range (double check) and map
+          const validMessages = history.messages.filter((msg: any) => {
+              if (startDate && msg.date < startDate) return false;
+              if (endDate && msg.date > endDate + 86400) return false; // + buffer just in case
+              return true;
+          });
+
+          const filesBatch = validMessages.map(mapMessageToFile).filter((f: any) => f !== null);
           
           if (filesBatch.length > 0) {
               totalFoundFiles += filesBatch.length;
-              // Emit batch to frontend immediately
               socket.emit('files_batch', filesBatch);
           }
           
           lastMessageId = history.messages[history.messages.length - 1].id;
           totalFetched += history.messages.length;
 
-          // Emit progress
           socket.emit('scan_progress', { scanned: totalFetched, found: totalFoundFiles, active: true });
           
-          // Small delay to prevent hitting TDLib rate limits/locks and ensure UI can update
+          // Break if we have passed the start date boundary
+          if (startDate && oldestInBatch.date < startDate) {
+             console.log('🛑 Reached start date boundary. Stopping scan.');
+             break;
+          }
+
           await new Promise(resolve => setTimeout(resolve, 50)); 
       }
       
-      // Notify frontend that scanning is done
       socket.emit('scan_progress', { scanned: totalFetched, found: totalFoundFiles, active: false });
       socket.emit('files_end');
       
     } catch (e) { 
         console.error('Get files error', e); 
         socket.emit('error', 'Error scanning chat history');
-        socket.emit('files_end'); // Ensure UI stops spinner
+        socket.emit('files_end'); 
     }
   });
 
@@ -592,6 +648,27 @@ io.on('connection', (socket) => {
                      status: 'paused'
                   });
               } catch (e) { console.error(`Error pausing ${fileId}`, e); }
+          }
+      }
+  });
+  
+  socket.on('resume_all_downloads', async () => {
+      console.log('Resuming all paused downloads...');
+      for (const [fileId, task] of activeDownloads.entries()) {
+          if (task.status === 'paused') {
+              try {
+                  await client.invoke({
+                    _: 'downloadFile',
+                    file_id: fileId,
+                    priority: 1, 
+                    offset: 0,
+                    limit: 0,
+                    synchronous: false
+                  });
+                  task.status = 'downloading';
+                  task.lastUpdateTime = Date.now();
+                  activeDownloads.set(fileId, task);
+              } catch (e) { console.error(`Error resuming ${fileId}`, e); }
           }
       }
   });

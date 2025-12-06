@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TdFile, FileType, Chat } from '../types';
-import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2 } from 'lucide-react';
+import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal } from 'lucide-react';
 import { api } from '../services/api';
 
 interface FileBrowserProps {
@@ -70,6 +70,149 @@ const DateInput: React.FC<{
   );
 };
 
+// Message Group Card Component
+const MessageCard: React.FC<{
+    group: { id: string; files: TdFile[]; text?: string; date: number };
+    selectedFiles: number[];
+    toggleSelection: (id: number) => void;
+    onDownloadFile: (id: number, name: string, size: number) => void;
+}> = ({ group, selectedFiles, toggleSelection, onDownloadFile }) => {
+    
+    const handleDownloadAll = () => {
+        group.files.forEach(f => onDownloadFile(f.id, f.name, f.size));
+    };
+
+    const handleSaveText = () => {
+        if (!group.text) return;
+        const blob = new Blob([group.text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `message_${group.date}_text.txt`;
+        link.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const isAllSelected = group.files.every(f => selectedFiles.includes(f.id));
+    
+    const toggleGroupSelection = () => {
+        if (isAllSelected) {
+            group.files.forEach(f => {
+                if (selectedFiles.includes(f.id)) toggleSelection(f.id);
+            });
+        } else {
+             group.files.forEach(f => {
+                if (!selectedFiles.includes(f.id)) toggleSelection(f.id);
+            });
+        }
+    };
+
+    const formatSize = (bytes: number) => {
+        const mb = bytes / 1024 / 1024;
+        return mb < 1 ? `${(bytes/1024).toFixed(1)} KB` : `${mb.toFixed(1)} MB`;
+    };
+
+    const getFileIcon = (type: FileType) => {
+        switch(type) {
+          case FileType.IMAGE: return <ImageIcon size={20} className="text-purple-400" />;
+          case FileType.VIDEO: return <Video size={20} className="text-rose-400" />;
+          case FileType.MUSIC: return <Music size={20} className="text-amber-400" />;
+          default: return <FileText size={20} className="text-blue-400" />;
+        }
+    };
+    
+    return (
+        <div className="bg-[#151e32] border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition-colors animate-fade-in flex flex-col">
+            {/* Card Header */}
+            <div className="bg-slate-900/50 p-3 flex justify-between items-center border-b border-slate-800/50">
+                <div className="flex items-center gap-3">
+                     <button onClick={toggleGroupSelection} className={`p-1 rounded hover:bg-slate-800 ${isAllSelected ? 'text-blue-500' : 'text-slate-500'}`}>
+                        {isAllSelected ? <CheckSquare size={18} /> : <Square size={18} />}
+                     </button>
+                     <span className="text-xs font-mono text-slate-500">
+                         {new Date(group.date * 1000).toLocaleString()}
+                     </span>
+                </div>
+                <button 
+                  onClick={handleDownloadAll}
+                  className="text-xs bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white px-2 py-1 rounded transition-colors flex items-center gap-1 font-medium"
+                >
+                    <DownloadCloud size={12} /> Download All
+                </button>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-4 flex flex-col gap-4">
+                {/* Text Section */}
+                {group.text && (
+                    <div className="bg-slate-900/80 p-3 rounded-lg border border-slate-800 relative group/text">
+                        <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto custom-scrollbar">
+                            {group.text}
+                        </p>
+                        <button 
+                          onClick={handleSaveText}
+                          className="absolute top-2 right-2 p-1.5 bg-slate-800 text-slate-400 hover:text-white rounded opacity-0 group-hover/text:opacity-100 transition-opacity"
+                          title="Save Text as .txt"
+                        >
+                            <Save size={14} />
+                        </button>
+                    </div>
+                )}
+
+                {/* Media Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {group.files.map(file => {
+                        const imageUrl = file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null;
+                        const isSelected = selectedFiles.includes(file.id);
+
+                        return (
+                            <div 
+                                key={file.id} 
+                                onClick={() => toggleSelection(file.id)}
+                                className={`relative aspect-square rounded-xl overflow-hidden cursor-pointer group/file border ${isSelected ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-700 bg-slate-800'}`}
+                            >
+                                {imageUrl ? (
+                                    <div className="w-full h-full relative">
+                                        <img src={imageUrl} alt={file.name} className="w-full h-full object-cover" loading="lazy" />
+                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/file:opacity-100 transition-opacity"></div>
+                                    </div>
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                                        {getFileIcon(file.type)}
+                                    </div>
+                                )}
+                                
+                                {/* Selection Check */}
+                                <div className={`absolute top-2 left-2 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover/file:opacity-100'} transition-opacity`}>
+                                     <div className={`w-5 h-5 rounded border bg-slate-900 flex items-center justify-center ${isSelected ? 'border-blue-500 text-blue-500' : 'border-slate-500 text-slate-500'}`}>
+                                         {isSelected && <CheckSquare size={12} />}
+                                     </div>
+                                </div>
+
+                                {/* Single DL Button */}
+                                <div className="absolute bottom-2 right-2 opacity-0 group-hover/file:opacity-100 transition-opacity">
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); onDownloadFile(file.id, file.name, file.size); }}
+                                      className="p-1.5 bg-slate-900/80 hover:bg-blue-600 text-white rounded-lg backdrop-blur-sm"
+                                    >
+                                        <ArrowDownToLine size={14} />
+                                    </button>
+                                </div>
+                                
+                                {/* File Info Badge */}
+                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6 pointer-events-none">
+                                    <p className="text-[10px] text-slate-300 truncate font-mono">{file.name}</p>
+                                    <p className="text-[9px] text-slate-400">{formatSize(file.size)}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [files, setFiles] = useState<TdFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -87,32 +230,60 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   const activeChat = chats.find(c => c.id === chatId);
 
-  useEffect(() => {
-    if (chatId) {
+  // Trigger scanning when Chat ID or Dates change
+  // We use a debounce or direct call logic. Since users might type slowly, 
+  // we only trigger date scan when valid dates are formed or button pressed.
+  // For now, let's trigger when full date is entered or on 'Enter' (but we have custom inputs).
+  // Better approach: Add a "Scan" button if dates are present, or Auto-scan if dates are valid.
+  // Given user UX requirement "Smart Scan", let's auto-scan when dates are valid enough.
+  
+  const fetchFiles = () => {
+      if (!chatId) return;
+      
       setLoading(true);
       setFiles([]); 
       setSelectedFiles([]);
       setScanStatus({ scanned: 0, found: 0, active: true });
+
+      let startTs: number | undefined = undefined;
+      let endTs: number | undefined = undefined;
+
+      if (startD.y && startD.m && startD.d && startD.y.length===4 && startD.m.length===2 && startD.d.length===2) {
+           startTs = Math.floor(new Date(parseInt(startD.y), parseInt(startD.m)-1, parseInt(startD.d)).getTime() / 1000);
+      }
+      if (endD.y && endD.m && endD.d && endD.y.length===4 && endD.m.length===2 && endD.d.length===2) {
+           endTs = Math.floor(new Date(parseInt(endD.y), parseInt(endD.m)-1, parseInt(endD.d), 23, 59, 59).getTime() / 1000);
+      }
       
-      api.getFiles(chatId);
-      
-      // Handle legacy single-update event (backup)
+      api.getFiles(chatId, startTs, endTs);
+  };
+
+  useEffect(() => {
+    // Only auto-fetch if NO dates are set (initial load), OR if chatId changes.
+    // If dates are partially set, we wait.
+    // If dates change fully, we trigger fetch.
+    
+    const startValid = !startD.y || (startD.y.length===4 && startD.m.length===2 && startD.d.length===2);
+    const endValid = !endD.y || (endD.y.length===4 && endD.m.length===2 && endD.d.length===2);
+
+    if (chatId && startValid && endValid) {
+        fetchFiles();
+    }
+  }, [chatId, startD, endD]); // Auto-re-fetch when dates become valid
+
+  useEffect(() => {
+      // Setup listeners
       const handleFilesUpdate = (newFiles: TdFile[]) => {
         setFiles(newFiles);
         setLoading(false);
       };
-
-      // Handle batched updates for infinite loading
       const handleFilesBatch = (newBatch: TdFile[]) => {
         setFiles(prev => [...prev, ...newBatch]);
       };
-
-      // Handle scan progress
       const handleScanProgress = (status: { scanned: number, found: number, active: boolean }) => {
           setScanStatus(status);
           if (status.active) setLoading(true);
       };
-
       const handleFilesEnd = () => {
         setLoading(false);
         setScanStatus(prev => ({ ...prev, active: false }));
@@ -129,32 +300,47 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         api.off('scan_progress', handleScanProgress);
         api.off('files_end', handleFilesEnd);
       };
-    }
-  }, [chatId]);
+  }, []);
 
-  // Filtering Logic
-  const filteredFiles = files.filter(file => {
-    const matchesType = filterType === FileType.ALL || file.type === filterType;
-    const matchesSearch = file.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesSize = (file.size / 1024 / 1024) >= minSize;
+  // Filtering & Grouping Logic
+  const groupedMessages = useMemo(() => {
+    // 1. Filter
+    const filtered = files.filter(file => {
+        const matchesType = filterType === FileType.ALL || file.type === filterType;
+        const matchesSearch = file.name.toLowerCase().includes(searchQuery.toLowerCase()) || (file.text && file.text.toLowerCase().includes(searchQuery.toLowerCase()));
+        const matchesSize = (file.size / 1024 / 1024) >= minSize;
+        return matchesType && matchesSearch && matchesSize;
+    });
+
+    // 2. Group
+    const groups: Record<string, { id: string, files: TdFile[], text?: string, date: number }> = {};
     
-    // Date Filtering
-    let matchesDate = true;
-    const fileDate = new Date(file.date * 1000);
-    fileDate.setHours(0,0,0,0);
+    filtered.forEach(file => {
+        // Prefer groupId (media_album_id), fallback to messageId
+        // If groupId is '0', it's not an album, so allow grouping by messageId
+        const key = (file.groupId && file.groupId !== '0') ? file.groupId : String(file.messageId);
+        
+        if (!groups[key]) {
+            groups[key] = {
+                id: key,
+                files: [],
+                text: file.text,
+                date: file.date
+            };
+        }
+        
+        // Use the longest text found in the group (usually same for all, or on first item)
+        if (file.text && (!groups[key].text || file.text.length > groups[key].text!.length)) {
+            groups[key].text = file.text;
+        }
 
-    if (startD.y && startD.m && startD.d) {
-        const start = new Date(parseInt(startD.y), parseInt(startD.m) - 1, parseInt(startD.d));
-        if (fileDate.getTime() < start.getTime()) matchesDate = false;
-    }
-    
-    if (endD.y && endD.m && endD.d) {
-        const end = new Date(parseInt(endD.y), parseInt(endD.m) - 1, parseInt(endD.d));
-        if (fileDate.getTime() > end.getTime()) matchesDate = false;
-    }
+        groups[key].files.push(file);
+    });
 
-    return matchesType && matchesSearch && matchesSize && matchesDate;
-  });
+    // Sort groups by date descending
+    return Object.values(groups).sort((a, b) => b.date - a.date);
+  }, [files, filterType, searchQuery, minSize]);
+
 
   const toggleSelection = (id: number) => {
     if (selectedFiles.includes(id)) {
@@ -165,10 +351,13 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   };
 
   const handleSelectAll = () => {
-    if (selectedFiles.length === filteredFiles.length) {
+    // Select all files visible in groupedMessages
+    const allVisibleIds = groupedMessages.flatMap(g => g.files.map(f => f.id));
+    
+    if (selectedFiles.length === allVisibleIds.length && allVisibleIds.length > 0) {
       setSelectedFiles([]);
     } else {
-      setSelectedFiles(filteredFiles.map(f => f.id));
+      setSelectedFiles(allVisibleIds);
     }
   };
 
@@ -180,27 +369,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       }
     });
     setSelectedFiles([]);
-  };
-
-  const formatSize = (bytes: number) => {
-    const mb = bytes / 1024 / 1024;
-    return mb < 1 ? `${(bytes/1024).toFixed(1)} KB` : `${mb.toFixed(1)} MB`;
-  };
-
-  const getFileIcon = (type: FileType) => {
-    switch(type) {
-      case FileType.IMAGE: return <ImageIcon size={28} className="text-purple-400" />;
-      case FileType.VIDEO: return <Video size={28} className="text-rose-400" />;
-      case FileType.MUSIC: return <Music size={28} className="text-amber-400" />;
-      default: return <FileText size={28} className="text-blue-400" />;
-    }
-  };
-
-  const getImageUrl = (file: TdFile) => {
-    if (file.thumbnail) {
-        return `data:image/jpeg;base64,${file.thumbnail}`;
-    }
-    return null;
   };
 
   if (!chatId) {
@@ -224,7 +392,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
              <div>
                 <h2 className="text-2xl font-bold text-slate-100 tracking-tight">{activeChat?.title}</h2>
                 <div className="flex gap-2 text-sm text-slate-500 mt-1 items-center">
-                    <span className="font-medium text-slate-400">{filteredFiles.length}</span> results found
+                    <span className="font-medium text-slate-400">{groupedMessages.length}</span> messages found
                     {scanStatus.active && (
                         <div className="flex items-center gap-1.5 ml-2 text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full animate-pulse">
                             <Loader2 size={10} className="animate-spin" />
@@ -255,7 +423,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
               <Search className="absolute left-3 top-2.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
               <input 
                 type="text" 
-                placeholder="Search files..." 
+                placeholder="Search files or caption..." 
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="pl-10 pr-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-200 focus:bg-slate-800 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 outline-none w-64 transition-all placeholder-slate-600"
@@ -289,8 +457,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
                onClick={handleSelectAll}
                className="flex items-center gap-2 text-sm text-slate-500 hover:text-blue-400 transition-colors px-2 py-1 rounded-lg hover:bg-slate-900"
              >
-               {selectedFiles.length === filteredFiles.length && filteredFiles.length > 0 ? <CheckSquare size={18} className="text-blue-500" /> : <Square size={18} />}
-               <span className="font-medium">Select All</span>
+               <span className="font-medium">Select All Visible</span>
              </button>
 
              {/* Size Filter */}
@@ -315,95 +482,40 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         </div>
       </div>
 
-      {/* Grid Content */}
-      <div className="flex-1 overflow-y-auto p-8 custom-scrollbar pb-32">
+      {/* Message Card List */}
+      <div className="flex-1 overflow-y-auto p-8 custom-scrollbar pb-32 space-y-6">
         {files.length === 0 && loading ? (
           <div className="flex flex-col justify-center items-center h-64 animate-fade-in">
             <div className="animate-spin rounded-full h-10 w-10 border-4 border-slate-800 border-t-blue-600 mb-4"></div>
-            <p className="text-slate-500 font-medium">Starting chat scan...</p>
+            <p className="text-slate-500 font-medium">Scanning chat history...</p>
           </div>
-        ) : filteredFiles.length === 0 && !loading ? (
+        ) : groupedMessages.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center h-96 text-slate-500 animate-fade-in">
             <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mb-4 border border-slate-800">
                <Filter size={32} className="opacity-40" />
             </div>
-            <p className="text-lg font-medium text-slate-400">No matching files found</p>
+            <p className="text-lg font-medium text-slate-400">No matching messages found</p>
             <p className="text-sm opacity-60">Try adjusting your filters or search query.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6">
-            {filteredFiles.map((file, index) => {
-              const imageUrl = getImageUrl(file);
-              
-              return (
-              <div 
-                key={file.id} 
-                onClick={() => toggleSelection(file.id)}
-                className={`group animate-fade-in relative bg-[#151e32] rounded-2xl transition-all duration-300 cursor-pointer overflow-hidden border ${selectedFiles.includes(file.id) ? 'ring-2 ring-blue-500 shadow-lg shadow-blue-500/20 translate-y-[-4px] border-blue-500' : 'border-slate-800/60 hover:shadow-xl hover:shadow-black/20 hover:translate-y-[-4px] hover:border-slate-700'}`}
-              >
-                {/* Thumbnail Area */}
-                <div className={`h-40 flex items-center justify-center relative overflow-hidden ${imageUrl ? 'bg-black' : 'bg-slate-900/50'}`}>
-                  {imageUrl ? (
-                    <>
-                       {/* Background Blur */}
-                       <div className="absolute inset-0 bg-cover bg-center blur-xl opacity-50 scale-110" style={{ backgroundImage: `url(${imageUrl})` }}></div>
-                       {/* Actual Image */}
-                       <img 
-                          src={imageUrl} 
-                          alt={file.name} 
-                          className="relative h-full w-full object-contain z-10 transition-transform duration-500 group-hover:scale-105" 
-                          loading="lazy"
-                        />
-                    </>
-                  ) : (
-                    <div className="transform transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
-                       {getFileIcon(file.type)}
-                    </div>
-                  )}
-                  
-                  {/* Overlay Gradient */}
-                  <div className={`absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 transition-opacity duration-300 ${selectedFiles.includes(file.id) ? 'opacity-100' : 'group-hover:opacity-100'}`}></div>
-
-                  {/* Checkbox */}
-                  <div className={`absolute top-3 left-3 transition-all duration-200 z-20 ${selectedFiles.includes(file.id) ? 'opacity-100 scale-100' : 'opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100'}`}>
-                    <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${selectedFiles.includes(file.id) ? 'bg-blue-600 border-blue-600' : 'bg-slate-900/90 border-slate-500 hover:border-blue-400'}`}>
-                      {selectedFiles.includes(file.id) && <CheckSquare size={14} className="text-white" />}
-                    </div>
-                  </div>
-                  
-                  {/* Download Action (Hover) */}
-                  <div className="absolute bottom-3 right-3 z-20 translate-y-10 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
-                     <button 
-                       onClick={(e) => { e.stopPropagation(); api.startDownload(file.id, file.name, file.size); }}
-                       className="bg-blue-600 text-white p-2.5 rounded-full shadow-lg hover:bg-blue-500 transition-colors"
-                       title="Download Now"
-                     >
-                       <DownloadCloud size={18} />
-                     </button>
-                  </div>
-                </div>
-
-                {/* File Details */}
-                <div className="p-4 relative z-10">
-                   <div className="flex justify-between items-start mb-1.5">
-                      <h3 className="text-sm font-semibold text-slate-200 truncate w-full pr-2" title={file.name}>{file.name}</h3>
-                   </div>
-                   <div className="flex justify-between items-center text-xs text-slate-500 font-medium">
-                     <span className="bg-slate-800 px-2 py-0.5 rounded text-slate-400 border border-slate-700/50">{formatSize(file.size)}</span>
-                     <span>{new Date(file.date * 1000).toLocaleDateString()}</span>
-                   </div>
-                </div>
-              </div>
-            )})}
+          <>
+            {groupedMessages.map(group => (
+                <MessageCard 
+                    key={group.id} 
+                    group={group} 
+                    selectedFiles={selectedFiles}
+                    toggleSelection={toggleSelection}
+                    onDownloadFile={(id, name, size) => api.startDownload(id, name, size)}
+                />
+            ))}
             
-            {/* Loading Indicator at end of list */}
             {loading && (
-                <div className="col-span-full py-8 flex justify-center items-center gap-3 text-slate-500 animate-pulse">
+                <div className="py-8 flex justify-center items-center gap-3 text-slate-500 animate-pulse">
                     <RefreshCw size={18} className="animate-spin" />
-                    <span className="text-sm font-medium">Scanning for more files...</span>
+                    <span className="text-sm font-medium">Scanning for more messages...</span>
                 </div>
             )}
-          </div>
+          </>
         )}
       </div>
       
@@ -412,13 +524,13 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700 text-slate-200 px-6 py-3 rounded-full shadow-2xl z-30 flex items-center gap-4 animate-fade-in">
              <div className="flex items-center gap-2">
                  <Loader2 size={16} className="text-blue-400 animate-spin" />
-                 <span className="text-sm font-semibold">Scanning History</span>
+                 <span className="text-sm font-semibold">Scanning</span>
              </div>
              <div className="h-4 w-px bg-slate-700"></div>
              <div className="text-xs space-x-3">
-                 <span><span className="text-blue-400 font-bold">{scanStatus.scanned}</span> msgs analyzed</span>
+                 <span><span className="text-blue-400 font-bold">{scanStatus.scanned}</span> analyzed</span>
                  <span className="text-slate-600">•</span>
-                 <span><span className="text-emerald-400 font-bold">{scanStatus.found}</span> files found</span>
+                 <span><span className="text-emerald-400 font-bold">{scanStatus.found}</span> found</span>
              </div>
          </div>
       )}

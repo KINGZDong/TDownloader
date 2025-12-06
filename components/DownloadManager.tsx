@@ -16,6 +16,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
   if (tasks.length === 0) return null;
 
   const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'pending').length;
+  const pausedCount = tasks.filter(t => t.status === 'paused').length;
   const completedCount = tasks.filter(t => t.status === 'completed').length;
 
   const totalSpeed = tasks.reduce((acc, task) => {
@@ -99,6 +100,16 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
                     <X size={12} /> Cancel All
                   </button>
                 </>
+              )}
+              
+              {pausedCount > 0 && (
+                 <button 
+                    onClick={(e) => { e.stopPropagation(); api.resumeAllDownloads(); }}
+                    className="text-xs flex items-center gap-1.5 bg-emerald-900/20 hover:bg-emerald-900/40 text-emerald-400 border border-emerald-900/30 px-2 py-1.5 rounded transition-colors font-medium"
+                    title="Resume All"
+                  >
+                    <Play size={12} /> Resume All
+                  </button>
               )}
             </div>
             

@@ -126,8 +126,8 @@ class ApiService {
     this.socket.emit('get_chats');
   }
 
-  async getFiles(chatId: number): Promise<void> {
-    this.socket.emit('get_files', chatId);
+  async getFiles(chatId: number, startDate?: number, endDate?: number): Promise<void> {
+    this.socket.emit('get_files', { chatId, startDate, endDate });
   }
 
   async setProxy(config: ProxyConfig): Promise<void> {
@@ -152,6 +152,10 @@ class ApiService {
   
   async pauseAllDownloads() {
     this.socket.emit('pause_all_downloads');
+  }
+  
+  async resumeAllDownloads() {
+    this.socket.emit('resume_all_downloads');
   }
 
   async cancelAllDownloads() {
