@@ -149,6 +149,14 @@ class ApiService {
   async cancelDownload(fileId: number) {
     this.socket.emit('cancel_download', fileId);
   }
+  
+  async pauseAllDownloads() {
+    this.socket.emit('pause_all_downloads');
+  }
+
+  async cancelAllDownloads() {
+    this.socket.emit('cancel_all_downloads');
+  }
 
   async clearCompleted() {
     this.socket.emit('clear_completed_downloads');

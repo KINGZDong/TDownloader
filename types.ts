@@ -44,7 +44,7 @@ export interface DownloadTask {
   progress: number; // 0-100
   speed: number; // bytes per second
   downloadedSize: number;
-  status: 'pending' | 'downloading' | 'paused' | 'completed' | 'error';
+  status: 'pending' | 'downloading' | 'paused' | 'completed' | 'error' | 'cancelled';
   totalSize: number;
 }
 

@@ -73,7 +73,7 @@ interface DownloadState {
   lastDownloadedSize: number;
   lastUpdateTime: number;
   speed: number;
-  status: 'pending' | 'downloading' | 'paused' | 'completed' | 'error';
+  status: 'pending' | 'downloading' | 'paused' | 'completed' | 'error' | 'cancelled';
 }
 let activeDownloads = new Map<number, DownloadState>(); 
 
@@ -269,8 +269,11 @@ client.on('update', (update) => {
 
        // 更新状态
        if (!file.local.is_downloading_active && !file.local.is_downloading_completed) {
-           downloadInfo.status = 'paused';
-           downloadInfo.speed = 0;
+           // If it was cancelled or paused manually, keep that status
+           if (downloadInfo.status !== 'cancelled' && downloadInfo.status !== 'paused') {
+              downloadInfo.status = 'paused';
+              downloadInfo.speed = 0;
+           }
        } else if (file.local.is_downloading_active) {
            downloadInfo.status = 'downloading';
        }
@@ -517,9 +520,80 @@ io.on('connection', (socket) => {
 
   socket.on('cancel_download', async (fileId) => {
     try {
+      // 1. Cancel network request
       await client.invoke({ _: 'cancelDownloadFile', file_id: fileId, only_if_pending: false });
+      
+      // 2. Try to delete local cache using TDLib (this ensures partial files are removed)
+      try {
+        await client.invoke({ _: 'deleteFile', file_id: fileId });
+      } catch (e) {
+          // Ignore error if file doesn't exist
+      }
+
+      // 3. Update status to cancelled before removing from map, so UI can update
+      const task = activeDownloads.get(fileId);
+      if (task) {
+          io.emit('download_progress', {
+             id: fileId,
+             fileName: task.fileName,
+             totalSize: task.totalSize,
+             downloadedSize: 0, // Reset size
+             progress: 0,
+             speed: 0,
+             status: 'cancelled'
+          });
+      }
+
+      // 4. Remove from active tracking
       activeDownloads.delete(fileId);
     } catch (e) { console.error(e); }
+  });
+  
+  socket.on('cancel_all_downloads', async () => {
+      console.log('Stopping all downloads...');
+      for (const [fileId, task] of activeDownloads.entries()) {
+          if (task.status === 'downloading' || task.status === 'paused' || task.status === 'pending') {
+              try {
+                  await client.invoke({ _: 'cancelDownloadFile', file_id: fileId, only_if_pending: false });
+                  try { await client.invoke({ _: 'deleteFile', file_id: fileId }); } catch(e) {}
+                  
+                  io.emit('download_progress', {
+                     id: fileId,
+                     fileName: task.fileName,
+                     totalSize: task.totalSize,
+                     downloadedSize: 0,
+                     progress: 0,
+                     speed: 0,
+                     status: 'cancelled'
+                  });
+              } catch (e) { console.error(`Error cancelling ${fileId}`, e); }
+          }
+      }
+      activeDownloads.clear();
+  });
+
+  socket.on('pause_all_downloads', async () => {
+      console.log('Pausing all downloads...');
+      for (const [fileId, task] of activeDownloads.entries()) {
+          if (task.status === 'downloading' || task.status === 'pending') {
+              try {
+                  await client.invoke({ _: 'cancelDownloadFile', file_id: fileId, only_if_pending: false });
+                  task.status = 'paused';
+                  task.speed = 0;
+                  activeDownloads.set(fileId, task);
+                  
+                  io.emit('download_progress', {
+                     id: fileId,
+                     fileName: task.fileName,
+                     totalSize: task.totalSize,
+                     downloadedSize: task.lastDownloadedSize,
+                     progress: task.totalSize ? Math.round((task.lastDownloadedSize / task.totalSize) * 100) : 0,
+                     speed: 0,
+                     status: 'paused'
+                  });
+              } catch (e) { console.error(`Error pausing ${fileId}`, e); }
+          }
+      }
   });
 
   socket.on('open_file_folder', ({ path }) => {

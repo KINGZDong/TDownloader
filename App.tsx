@@ -103,6 +103,7 @@ const App: React.FC = () => {
         activeChatId={activeChatId} 
         onSelectChat={setActiveChatId}
         currentUser="User"
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
       
       <FileBrowser 
@@ -111,6 +112,13 @@ const App: React.FC = () => {
       />
       
       <DownloadManager tasks={downloads} />
+
+      {/* Main Settings Modal (General) */}
+      <SettingsModal 
+          isOpen={isSettingsOpen} 
+          onClose={() => setIsSettingsOpen(false)} 
+          mode="general"
+      />
     </div>
   );
 };

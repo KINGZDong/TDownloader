@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TdFile, FileType, Chat } from '../types';
 import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2 } from 'lucide-react';
 import { api } from '../services/api';
@@ -7,6 +7,68 @@ interface FileBrowserProps {
   chatId: number | null;
   chats: Chat[];
 }
+
+// Custom Date Input Component
+const DateInput: React.FC<{ 
+  label: string, 
+  value: {y: string, m: string, d: string}, 
+  onChange: (val: {y: string, m: string, d: string}) => void 
+}> = ({ label, value, onChange }) => {
+  const yearRef = useRef<HTMLInputElement>(null);
+  const monthRef = useRef<HTMLInputElement>(null);
+  const dayRef = useRef<HTMLInputElement>(null);
+
+  const handleChange = (part: 'y'|'m'|'d', val: string) => {
+    // Only numbers
+    if (val && !/^\d+$/.test(val)) return;
+    
+    // Limits
+    if (part === 'm' && parseInt(val) > 12) val = '12';
+    if (part === 'd' && parseInt(val) > 31) val = '31';
+    
+    const newVal = { ...value, [part]: val };
+    onChange(newVal);
+
+    // Auto focus logic
+    if (part === 'y' && val.length === 4 && monthRef.current) monthRef.current.focus();
+    if (part === 'm' && val.length === 2 && dayRef.current) dayRef.current.focus();
+  };
+
+  return (
+    <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 px-2 py-1.5 rounded-xl text-slate-400 group focus-within:border-blue-500/50">
+       <span className="text-[10px] font-bold text-slate-600 uppercase mr-1">{label}</span>
+       <input 
+         ref={yearRef}
+         type="text" 
+         maxLength={4}
+         placeholder="YYYY" 
+         className="w-9 bg-transparent border-none text-xs text-slate-200 focus:outline-none text-center font-mono placeholder-slate-700"
+         value={value.y}
+         onChange={(e) => handleChange('y', e.target.value)}
+       />
+       <span className="text-slate-600">/</span>
+       <input 
+         ref={monthRef}
+         type="text" 
+         maxLength={2}
+         placeholder="MM"
+         className="w-6 bg-transparent border-none text-xs text-slate-200 focus:outline-none text-center font-mono placeholder-slate-700"
+         value={value.m}
+         onChange={(e) => handleChange('m', e.target.value)}
+       />
+       <span className="text-slate-600">/</span>
+       <input 
+         ref={dayRef}
+         type="text" 
+         maxLength={2}
+         placeholder="DD"
+         className="w-6 bg-transparent border-none text-xs text-slate-200 focus:outline-none text-center font-mono placeholder-slate-700"
+         value={value.d}
+         onChange={(e) => handleChange('d', e.target.value)}
+       />
+    </div>
+  );
+};
 
 const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [files, setFiles] = useState<TdFile[]>([]);
@@ -18,8 +80,10 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [minSize, setMinSize] = useState(0); // in MB
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  
+  // Custom Date State
+  const [startD, setStartD] = useState({y: '', m: '', d: ''});
+  const [endD, setEndD] = useState({y: '', m: '', d: ''});
 
   const activeChat = chats.find(c => c.id === chatId);
 
@@ -76,22 +140,17 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
     
     // Date Filtering
     let matchesDate = true;
-    if (startDate || endDate) {
-        // file.date is Unix timestamp in seconds, convert to milliseconds
-        const fileDate = new Date(file.date * 1000);
-        fileDate.setHours(0,0,0,0); // normalize time part
+    const fileDate = new Date(file.date * 1000);
+    fileDate.setHours(0,0,0,0);
 
-        if (startDate) {
-            const start = new Date(startDate);
-            start.setHours(0,0,0,0);
-            if (fileDate.getTime() < start.getTime()) matchesDate = false;
-        }
-        
-        if (endDate) {
-            const end = new Date(endDate);
-            end.setHours(0,0,0,0);
-            if (fileDate.getTime() > end.getTime()) matchesDate = false;
-        }
+    if (startD.y && startD.m && startD.d) {
+        const start = new Date(parseInt(startD.y), parseInt(startD.m) - 1, parseInt(startD.d));
+        if (fileDate.getTime() < start.getTime()) matchesDate = false;
+    }
+    
+    if (endD.y && endD.m && endD.d) {
+        const end = new Date(parseInt(endD.y), parseInt(endD.m) - 1, parseInt(endD.d));
+        if (fileDate.getTime() > end.getTime()) matchesDate = false;
     }
 
     return matchesType && matchesSearch && matchesSize && matchesDate;
@@ -216,23 +275,11 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
               ))}
             </div>
             
-            {/* Date Picker */}
-            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl text-slate-400">
-               <Calendar size={16} className="ml-2" />
-               <input 
-                  type="date" 
-                  value={startDate}
-                  onChange={e => setStartDate(e.target.value)}
-                  className="bg-transparent border-none text-xs text-slate-200 focus:outline-none w-28 calendar-input"
-                  placeholder="Start"
-               />
-               <span className="text-slate-600">-</span>
-               <input 
-                  type="date" 
-                  value={endDate}
-                  onChange={e => setEndDate(e.target.value)}
-                  className="bg-transparent border-none text-xs text-slate-200 focus:outline-none w-28 calendar-input"
-               />
+            {/* Custom Manual Date Picker */}
+            <div className="flex items-center gap-2">
+                <DateInput label="Start" value={startD} onChange={setStartD} />
+                <span className="text-slate-600">-</span>
+                <DateInput label="End" value={endD} onChange={setEndD} />
             </div>
           </div>
 
