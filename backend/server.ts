@@ -19,9 +19,13 @@ const { Client } = require('tdl');
 
 // --- 0. 防止进程崩溃的关键代码 ---
 process.on('unhandledRejection', (reason: any, promise) => {
-  // 忽略 "Request aborted" 错误，这是在 client.close() 时中断请求产生的正常行为
-  if (reason && (reason.message === 'Request aborted' || reason.code === 500)) {
-      return; 
+  if (reason) {
+      // 忽略 "Request aborted" 错误 (Code 500)
+      if (reason.message === 'Request aborted' || reason.code === 500) return;
+      
+      // 忽略 "Call to requestQrCodeAuthentication unexpected" 错误 (Code 400)
+      // 这通常发生在前端重复请求二维码或状态不匹配时
+      if (reason.code === 400 && reason.message?.includes('requestQrCodeAuthentication')) return;
   }
   
   console.error('⚠️ 警告: 捕获到未处理的 Promise 拒绝 (通常是 TDLib 网络错误)');
@@ -564,7 +568,18 @@ io.on('connection', (socket) => {
         }
         try { await client.invoke({ _: 'getAuthorizationState' }); } catch {}
     });
-    socket.on('request_qr', async () => client?.invoke({ _: 'requestQrCodeAuthentication', other_user_ids: [] }));
+    
+    socket.on('request_qr', async () => {
+        if (!client) return;
+        try {
+            await client.invoke({ _: 'requestQrCodeAuthentication', other_user_ids: [] });
+        } catch (e: any) {
+            // Ignore if already requesting or state mismatch to prevent spamming server logs
+            if (e?.code === 400) return;
+            console.error('QR Request Error:', e);
+        }
+    });
+    
     socket.on('login_phone', async (p) => client?.invoke({ _: 'setAuthenticationPhoneNumber', phone_number: p }));
     socket.on('login_code', async (c) => client?.invoke({ _: 'checkAuthenticationCode', code: c }));
     socket.on('login_password', async (p) => client?.invoke({ _: 'checkAuthenticationPassword', password: p }));
@@ -573,6 +588,10 @@ io.on('connection', (socket) => {
     socket.on('get_chats', async () => {
         if (!client) return;
         try {
+            // Verify Client is Ready to avoid "Not Found" errors during switching
+            const authState = await client.invoke({ _: 'getAuthorizationState' });
+            if (authState._ !== 'authorizationStateReady') return;
+
             await client.invoke({ _: 'loadChats', chat_list: { _: 'chatListMain' }, limit: 20 });
             const result = await client.invoke({ _: 'getChats', chat_list: { _: 'chatListMain' }, limit: 50 });
             const chatsPromises = result.chat_ids.map((id: number) => client.invoke({ _: 'getChat', chat_id: id }));
@@ -580,6 +599,7 @@ io.on('connection', (socket) => {
             socket.emit('chats_update', chatsRaw.map(mapChat));
         } catch (e: any) { 
             // Better error handling for 404/Not Found
+            if (e?.code === 404 || e?.message === 'Not Found') return;
             console.error('Failed to load chats:', e?.message || e);
         }
     });
