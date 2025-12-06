@@ -28,7 +28,10 @@ export enum FileType {
 export interface TdFile {
   id: number; // This is the file_id used for downloading
   uniqueId: string;
+  messageId: number; // The ID of the message this file belongs to
+  groupId: string; // media_album_id for grouping (0 if none)
   name: string;
+  text?: string; // Caption or message text
   size: number; // in bytes
   date: number; // timestamp
   type: FileType;
