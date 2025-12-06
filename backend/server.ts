@@ -248,20 +248,10 @@ function handleFileUpdate(file: any) {
     // 1. Handle Active Main Downloads
     let downloadInfo = activeDownloads.get(file.id);
 
-    if (downloadInfo || file.local.is_downloading_active) {
-       if (!downloadInfo) {
-         downloadInfo = {
-           fileName: 'Unknown File', 
-           totalSize: file.expected_size,
-           startTime: Date.now(),
-           lastDownloadedSize: file.local.downloaded_size,
-           lastUpdateTime: Date.now(),
-           speed: 0,
-           status: 'downloading'
-         };
-         activeDownloads.set(file.id, downloadInfo);
-       }
-
+    // FIX: Only process progress if this file is in our active user-initiated downloads list.
+    // We REMOVED the "|| file.local.is_downloading_active" check that was auto-adding unknown files.
+    if (downloadInfo) {
+       
        if (!file.local.is_downloading_active && !file.local.is_downloading_completed) {
            if (downloadInfo.status !== 'cancelled' && downloadInfo.status !== 'paused') {
               downloadInfo.status = 'paused';
@@ -320,13 +310,14 @@ function handleFileUpdate(file: any) {
 
     // 2. Handle Thumbnail Downloads
     // If a file finishes downloading and it is NOT in activeDownloads, it might be a thumbnail request
+    // This logic is safe because it only emits 'thumbnail_ready', not 'download_progress'
     if (file.local.is_downloading_completed && !downloadInfo) {
         // Read file and check if we should emit it
-        // We can optimize this by maintaining a set of "pendingThumbnails", but sending it generally is safer for now
-        // To be safe, we check if file size is small (thumbnails are small)
-        if (file.size < 1024 * 1024) { // < 1MB
+        // We check if file size is small (thumbnails are small)
+        if (file.size < 20 * 1024 * 1024) { // Increased limit slightly to 20MB just in case, but usually small
             try {
                 if (fs.existsSync(file.local.path)) {
+                    // We only emit this. The frontend decides if it requested this fileId for a thumbnail.
                     const data = fs.readFileSync(file.local.path).toString('base64');
                     io.emit('thumbnail_ready', { fileId: file.id, data: data });
                 }
