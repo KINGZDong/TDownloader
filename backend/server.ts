@@ -17,8 +17,13 @@ const require = createRequire(import.meta.url);
 const { Client } = require('tdl');
 
 // --- 配置区域 ---
-const API_ID = 20293998; 
-const API_HASH = 'c02157796d88835821d3f25c739d2906';
+const API_ID = process.env.API_ID; 
+const API_HASH = process.env.API_HASH;
+
+// 确保值存在，否则抛出错误
+if (!API_ID || !API_HASH) {
+    throw new Error("API_ID 或 API_HASH 环境变量未设置！");
+}
 
 // 2. 自动检测系统平台以加载对应的库文件
 const platform = os.platform();
