@@ -397,9 +397,16 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         setFiles(newFiles);
         setLoading(false);
       };
+      
+      // MODIFIED: Deduplication to handle expanded groups from backend
       const handleFilesBatch = (newBatch: TdFile[]) => {
-        setFiles(prev => [...prev, ...newBatch]);
+        setFiles(prev => {
+            const existingIds = new Set(prev.map(f => f.id));
+            const unique = newBatch.filter(f => !existingIds.has(f.id));
+            return [...prev, ...unique];
+        });
       };
+      
       const handleScanProgress = (status: { scanned: number, found: number, active: boolean }) => {
           setScanStatus(status);
           if (status.active) setLoading(true);

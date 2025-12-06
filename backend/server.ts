@@ -18,7 +18,7 @@ const require = createRequire(import.meta.url);
 const { Client } = require('tdl');
 
 // --- 0. 防止进程崩溃的关键代码 ---
-process.on('unhandledRejection', (reason: any, promise) => {
+(process as any).on('unhandledRejection', (reason: any, promise: any) => {
   if (reason) {
       if (reason.message === 'Request aborted' || reason.code === 500) return;
       if (reason.code === 400 && reason.message?.includes('requestQrCodeAuthentication')) return;
@@ -27,7 +27,7 @@ process.on('unhandledRejection', (reason: any, promise) => {
   console.error('原因:', reason);
 });
 
-process.on('uncaughtException', (error) => {
+(process as any).on('uncaughtException', (error: any) => {
     console.error('⚠️ 警告: 捕获到未处理的异常');
     console.error(error);
 });
@@ -44,7 +44,7 @@ if (!API_ID || !API_HASH) {
   console.error('API_ID=your_api_id');
   console.error('API_HASH=your_api_hash');
   console.error('==================================================\n');
-  process.exit(1);
+  (process as any).exit(1);
 }
 
 // 2. 自动检测系统平台以加载对应的库文件
@@ -59,7 +59,7 @@ const libPath = path.resolve(__dirname, libName);
 if (!fs.existsSync(libPath)) {
   console.error(`❌ Error: TDLib library not found: ${libName}`);
   console.error(`Please place ${libName} in the backend directory.`);
-  process.exit(1);
+  (process as any).exit(1);
 }
 
 // --- 初始化 Server (Socket.io Only) ---
@@ -585,7 +585,8 @@ io.on('connection', (socket) => {
                  if (thisRequestId !== currentScanRequestId) break;
                  if (limit > 0 && totalFoundFiles >= limit) break;
                  
-                 let messages = [];
+                 let rawMessages = [];
+                 let messagesToProcess = [];
 
                  if (useSearch) {
                      // SERVER-SIDE SEARCH
@@ -598,10 +599,43 @@ io.on('connection', (socket) => {
                          offset: 0,
                          filter: getTdlibFilter(type)
                      });
-                     messages = result.messages || [];
-                     if (messages.length > 0) {
-                         // For search, the next cursor is the last message ID
-                         lastMessageId = messages[messages.length - 1].id;
+                     rawMessages = result.messages || [];
+                     
+                     if (rawMessages.length > 0) {
+                        lastMessageId = rawMessages[rawMessages.length - 1].id;
+                        
+                        // GROUP EXPANSION LOGIC
+                        const groupIdsToFetch = new Set<string>();
+                        const plainMessages = [];
+                        
+                        for(const msg of rawMessages) {
+                            if(msg.media_album_id && msg.media_album_id !== "0") {
+                                groupIdsToFetch.add(msg.media_album_id);
+                            } else {
+                                plainMessages.push(msg);
+                            }
+                        }
+                        
+                        const groupPromises = Array.from(groupIdsToFetch).map(gid => {
+                            const representative = rawMessages.find((m: any) => m.media_album_id === gid);
+                            return client.invoke({ _: 'getMessageGroup', chat_id: chatId, message_id: representative.id })
+                                .then((res: any) => res.messages || [])
+                                .catch(() => []);
+                        });
+                        
+                        const groupResults = await Promise.all(groupPromises);
+                        const allGroupMessages = groupResults.flat();
+                        
+                        // Merge and Dedup by ID
+                        const allMsgs = [...plainMessages, ...allGroupMessages];
+                        const uniqueMap = new Map();
+                        allMsgs.forEach(m => uniqueMap.set(m.id, m));
+                        messagesToProcess = Array.from(uniqueMap.values());
+                        
+                        // Ensure descending sort for UI consistency (though UI sorts too)
+                        messagesToProcess.sort((a: any, b: any) => b.date - a.date);
+                     } else {
+                        messagesToProcess = [];
                      }
                  } else {
                      // STANDARD HISTORY
@@ -613,16 +647,17 @@ io.on('connection', (socket) => {
                         offset: 0,
                         only_local: false
                      });
-                     messages = history.messages || [];
-                     if (messages.length > 0) {
-                         lastMessageId = messages[messages.length - 1].id;
+                     rawMessages = history.messages || [];
+                     if (rawMessages.length > 0) {
+                         lastMessageId = rawMessages[rawMessages.length - 1].id;
                      }
+                     messagesToProcess = rawMessages;
                  }
 
-                 if (messages.length === 0) break;
+                 if (rawMessages.length === 0) break;
 
-                 const oldestInBatch = messages[messages.length - 1];
-                 const validMessages = messages.filter((msg: any) => {
+                 const oldestInBatch = rawMessages[rawMessages.length - 1];
+                 const validMessages = messagesToProcess.filter((msg: any) => {
                       if (startDate && msg.date < startDate) return false;
                       if (endDate && msg.date > endDate + 86400) return false;
                       return true;
@@ -639,13 +674,13 @@ io.on('connection', (socket) => {
                       socket.emit('files_batch', batchToSend);
                  }
                  
-                 totalFetched += messages.length;
+                 totalFetched += rawMessages.length;
                  socket.emit('scan_progress', { scanned: totalFetched, found: totalFoundFiles, active: true });
                  
                  // Break conditions
                  if (startDate && oldestInBatch.date < startDate) break;
                  if (limit > 0 && totalFoundFiles >= limit) break;
-                 if (messages.length < BATCH_SIZE) break; // End of history/results
+                 if (rawMessages.length < BATCH_SIZE) break; // End of history/results
 
                  await new Promise(r => setTimeout(r, 50));
              }
