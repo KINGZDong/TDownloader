@@ -257,49 +257,73 @@ async function initializeClient(sessionId: string) {
 }
 
 // --- File Handling Helper ---
+function emitProgress(file: any, info: any) {
+    let progress = file.expected_size > 0 ? Math.round((file.local.downloaded_size / file.expected_size) * 100) : 0;
+    io.emit('download_progress', {
+         id: file.id,
+         fileName: info.fileName,
+         totalSize: file.expected_size,
+         downloadedSize: file.local.downloaded_size,
+         progress: progress,
+         speed: info.speed,
+         status: file.local.is_downloading_completed ? 'completed' : info.status
+    });
+}
+
 function handleFileUpdate(file: any) {
     if (!file || !file.local) return; 
 
     let downloadInfo = activeDownloads.get(file.id);
 
     if (downloadInfo) {
-       // Update logic for status
+       // --- 1. Detect Status Change ---
+       let newStatus = downloadInfo.status;
        if (!file.local.is_downloading_active && !file.local.is_downloading_completed) {
            // If TDLib says not active, and we haven't explicitly cancelled, mark as paused
            if (downloadInfo.status !== 'cancelled' && downloadInfo.status !== 'paused') {
-              downloadInfo.status = 'paused';
-              downloadInfo.speed = 0;
+              newStatus = 'paused';
            }
        } else if (file.local.is_downloading_active) {
-           downloadInfo.status = 'downloading';
+           newStatus = 'downloading';
        }
 
+       // Handle Status Transition
+       if (newStatus !== downloadInfo.status) {
+           downloadInfo.status = newStatus;
+           downloadInfo.speed = 0; // Reset speed calculation on status change
+           activeDownloads.set(file.id, downloadInfo);
+           // Emit immediately so UI updates status right away
+           emitProgress(file, downloadInfo);
+           
+           // If completed, we will fall through to completion logic below
+       }
+
+       // --- 2. Downloading Speed Logic (THROTTLED) ---
        if (downloadInfo.status === 'downloading') {
          const now = Date.now();
          const timeDiff = now - downloadInfo.lastUpdateTime;
-         if (timeDiff > 800) {
+         
+         // CRITICAL FIX: Throttle UI updates to 500ms.
+         // TDLib fires updateFile extremely fast (100+ times/sec on high speed).
+         // Without throttling, we choke the Node event loop with socket.emit, killing download speed.
+         if (timeDiff > 500) {
            const bytesDiff = file.local.downloaded_size - downloadInfo.lastDownloadedSize;
-           const speed = bytesDiff > 0 ? (bytesDiff / timeDiff) * 1000 : 0; 
+           const speed = (bytesDiff >= 0 && timeDiff > 0) ? (bytesDiff / timeDiff) * 1000 : 0; 
+           
            downloadInfo.speed = speed;
            downloadInfo.lastDownloadedSize = file.local.downloaded_size;
            downloadInfo.lastUpdateTime = now;
            activeDownloads.set(file.id, downloadInfo);
+           
+           emitProgress(file, downloadInfo);
          }
        }
 
-       let progress = file.expected_size > 0 ? Math.round((file.local.downloaded_size / file.expected_size) * 100) : 0;
-       
-       io.emit('download_progress', {
-         id: file.id,
-         fileName: downloadInfo.fileName,
-         totalSize: file.expected_size,
-         downloadedSize: file.local.downloaded_size,
-         progress: progress,
-         speed: downloadInfo.speed,
-         status: file.local.is_downloading_completed ? 'completed' : downloadInfo.status
-       });
-
+       // --- 3. Completion Logic ---
        if (file.local.is_downloading_completed) {
+         // Emit final 100% state immediately (bypass throttle)
+         emitProgress(file, { ...downloadInfo, status: 'completed', speed: 0 });
+
          const finalPath = path.join(appConfig.downloadPath, downloadInfo.fileName);
          try {
             if (!fs.existsSync(appConfig.downloadPath)) fs.mkdirSync(appConfig.downloadPath, { recursive: true });
@@ -324,6 +348,7 @@ function handleFileUpdate(file: any) {
        }
     }
 
+    // Thumbnail logic for browsing
     if (file.local.is_downloading_completed && !downloadInfo) {
         if (file.size < 20 * 1024 * 1024) { 
             try {
@@ -429,7 +454,7 @@ export function mapMessageToFile(message: any): any | null {
           } else {
               fileName = `File_${dateStr}.dat`;
           }
-          // Append partial ID to avoid collision in same second
+          // Only append partial ID if we generated the name (to prevent collisions in same second)
           fileName = fileName.replace('.', `_${fileData.id}.`); 
       }
       // ---------------------------------------
