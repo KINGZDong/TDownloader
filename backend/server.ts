@@ -557,7 +557,8 @@ io.on('connection', (socket) => {
         const startDate = typeof params === 'object' ? params.startDate : undefined; 
         const endDate = typeof params === 'object' ? params.endDate : undefined; 
         const limit = (typeof params === 'object' && params.limit) ? params.limit : 0;
-        const query = (typeof params === 'object' && params.query) ? params.query : '';
+        const rawQuery = (typeof params === 'object' && params.query) ? params.query : '';
+        const query = rawQuery.trim(); // TRIMMED
         const type = (typeof params === 'object' && params.type) ? params.type : 'All';
 
         try {

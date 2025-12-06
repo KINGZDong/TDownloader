@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TdFile, FileType, Chat } from '../types';
-import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal, Layers, AlertCircle, X } from 'lucide-react';
+import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal, Layers, AlertCircle, X, ArrowRight } from 'lucide-react';
 import { api } from '../services/api';
 
 interface FileBrowserProps {
@@ -296,8 +296,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   
   // Filters
   const [filterType, setFilterType] = useState<FileType>(FileType.ALL);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [searchInputValue, setSearchInputValue] = useState(''); // What the user types
+  const [activeSearchQuery, setActiveSearchQuery] = useState(''); // What is actually sent to server
   const [minSize, setMinSize] = useState(0); // in MB
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
   
@@ -307,15 +307,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   const activeChat = chats.find(c => c.id === chatId);
 
-  // Debounce logic for search query
-  useEffect(() => {
-    const handler = setTimeout(() => {
-        setDebouncedSearchQuery(searchQuery);
-    }, 500); // 500ms debounce
-    return () => clearTimeout(handler);
-  }, [searchQuery]);
-
-  const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number) => {
+  const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number, overrideQuery?: string) => {
       if (!chatId) return;
       
       setLoading(true);
@@ -333,6 +325,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       if (endTs === undefined && endD.y.length === 4 && endD.m && endD.d) {
            endTs = Math.floor(new Date(parseInt(endD.y), parseInt(endD.m)-1, parseInt(endD.d), 23, 59, 59).getTime() / 1000);
       }
+      
+      const queryToUse = overrideQuery !== undefined ? overrideQuery : activeSearchQuery;
 
       // Logic:
       // 1. If forceAll is true -> Limit 0 (Unlimited)
@@ -341,7 +335,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       // 4. Default -> Limit 500
       
       const hasDateFilter = startTs !== undefined || endTs !== undefined;
-      const hasSearch = debouncedSearchQuery.length > 0;
+      const hasSearch = queryToUse.length > 0;
       const hasTypeFilter = filterType !== FileType.ALL;
 
       const limit = (forceAll || hasDateFilter || hasSearch || hasTypeFilter) ? 0 : 500;
@@ -349,7 +343,19 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       setIsLimited(limit > 0);
       
       // We pass the filter type and search query to backend now
-      api.getFiles(chatId, startTs, endTs, limit, debouncedSearchQuery, filterType);
+      api.getFiles(chatId, startTs, endTs, limit, queryToUse, filterType);
+  };
+  
+  const handleManualSearch = () => {
+      if (!chatId) return;
+      setActiveSearchQuery(searchInputValue);
+      fetchFiles(false, undefined, undefined, searchInputValue);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+          handleManualSearch();
+      }
   };
 
   // 1. Chat ID changed -> Reset filters and fetch default
@@ -357,22 +363,21 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
     if (chatId) {
         setStartD({y: '', m: '', d: ''});
         setEndD({y: '', m: '', d: ''});
-        setSearchQuery('');
-        setDebouncedSearchQuery('');
+        setSearchInputValue('');
+        setActiveSearchQuery('');
         setFilterType(FileType.ALL);
         
         // Fetch with default 500 limit
-        fetchFiles(false, undefined, undefined);
+        fetchFiles(false, undefined, undefined, '');
     }
   }, [chatId]); 
 
-  // 2. Search Query OR Filter Type Changed -> Re-fetch
-  // Note: We listen to debouncedSearchQuery, not raw searchQuery
+  // 2. Filter Type Changed -> Re-fetch (keep existing search query if any)
   useEffect(() => {
     if (chatId) {
         fetchFiles(false);
     }
-  }, [debouncedSearchQuery, filterType]);
+  }, [filterType]);
 
   // 3. Auto-fetch when dates become valid
   useEffect(() => {
@@ -481,8 +486,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const handleClearDates = () => {
       setStartD({y: '', m: '', d: ''});
       setEndD({y: '', m: '', d: ''});
-      // fetchFiles trigger handled by effect, but specific logic might vary, 
-      // effect will see empty dates and do normal fetch
   };
 
   if (!chatId) {
@@ -541,15 +544,25 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         <div className="flex flex-wrap gap-4 items-center justify-between">
           <div className="flex gap-4 items-center flex-wrap">
             {/* Search */}
-            <div className="relative group">
-              <Search className="absolute left-3 top-2.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search files or caption..." 
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="pl-10 pr-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-200 focus:bg-slate-800 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 outline-none w-64 transition-all placeholder-slate-600"
-              />
+            <div className="relative group flex items-center gap-2">
+              <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Search query..." 
+                    value={searchInputValue}
+                    onChange={e => setSearchInputValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    className="pl-10 pr-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-200 focus:bg-slate-800 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 outline-none w-64 transition-all placeholder-slate-600"
+                  />
+              </div>
+              <button 
+                onClick={handleManualSearch}
+                className="p-2.5 bg-slate-800 hover:bg-blue-600 text-slate-400 hover:text-white rounded-xl border border-slate-700 hover:border-blue-500 transition-colors"
+                title="Search (Enter)"
+              >
+                  <ArrowRight size={16} />
+              </button>
             </div>
 
             {/* Type Tabs */}
@@ -583,7 +596,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
                 </div>
                 
                 <button 
-                  onClick={() => fetchFiles(true)}
+                  onClick={() => fetchFiles(true, undefined, undefined, '')}
                   className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 p-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-sm ml-4"
                   title="Ignore limits and fetch complete history"
                 >
