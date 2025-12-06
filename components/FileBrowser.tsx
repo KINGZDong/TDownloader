@@ -70,6 +70,99 @@ const DateInput: React.FC<{
   );
 };
 
+// Internal Component: Thumbnail Handler
+const FileThumbnail: React.FC<{ file: TdFile }> = ({ file }) => {
+    const [hqThumbnail, setHqThumbnail] = useState<string | null>(null);
+    const [isLoaded, setIsLoaded] = useState(false);
+
+    useEffect(() => {
+        // Reset state when file ID changes
+        setHqThumbnail(null);
+        setIsLoaded(false);
+
+        // If we have a thumbnail ID, request it
+        if (file.thumbnailFileId) {
+            api.requestThumbnail(file.thumbnailFileId);
+        }
+
+        // Listener for specific file
+        const handleThumb = (data: { fileId: number, data: string }) => {
+            if (data.fileId === file.thumbnailFileId) {
+                setHqThumbnail(data.data);
+                // We don't set isLoaded=true here, we wait for the img onLoad event
+                // to ensures the browser has actually decoded the base64 data.
+            }
+        };
+
+        api.on('thumbnail_ready', handleThumb);
+        return () => api.off('thumbnail_ready', handleThumb);
+    }, [file.id, file.thumbnailFileId]);
+
+    const getFileIcon = (type: FileType) => {
+        switch(type) {
+          case FileType.IMAGE: return <ImageIcon size={24} className="text-purple-400" />;
+          case FileType.VIDEO: return <Video size={24} className="text-rose-400" />;
+          case FileType.MUSIC: return <Music size={24} className="text-amber-400" />;
+          default: return <FileText size={24} className="text-blue-400" />;
+        }
+    };
+    
+    const hasMiniThumb = !!file.thumbnail;
+    const hasHqThumb = !!hqThumbnail;
+
+    // If no thumbnails at all (and no ID to request), show Icon
+    if (!hasMiniThumb && !hasHqThumb && !file.thumbnailFileId) {
+         return (
+            <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                {getFileIcon(file.type)}
+            </div>
+        );
+    }
+    
+    // Layered Rendering for Smooth Transition
+    return (
+        <div className="w-full h-full relative bg-slate-800 overflow-hidden">
+             {/* Layer 1: Placeholder (Blurry Mini Thumbnail) - Fade out when HQ loaded */}
+             {hasMiniThumb && (
+                 <img 
+                    src={`data:image/jpeg;base64,${file.thumbnail}`}
+                    className={`absolute inset-0 w-full h-full object-cover blur-xl scale-110 transition-opacity duration-700 ${isLoaded ? 'opacity-0' : 'opacity-70'}`}
+                    alt=""
+                 />
+             )}
+             
+             {/* Layer 2: Icon Fallback (while waiting for HQ if no mini thumb) */}
+             {!hasMiniThumb && !hasHqThumb && (
+                 <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="animate-pulse opacity-50">
+                        {getFileIcon(file.type)}
+                    </div>
+                 </div>
+             )}
+
+             {/* Layer 3: HQ Thumbnail (Fades in on top) */}
+             {hasHqThumb && (
+                 <img 
+                    src={`data:image/jpeg;base64,${hqThumbnail}`}
+                    alt={file.name}
+                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-in-out z-10 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+                    onLoad={() => setIsLoaded(true)}
+                 />
+             )}
+             
+             {/* Overlay for hover effects */}
+             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/file:opacity-100 transition-opacity z-20"></div>
+             
+             {/* File Type Badge */}
+             {file.type !== FileType.IMAGE && (
+                 <div className="absolute top-2 right-2 bg-black/60 p-1.5 rounded-lg backdrop-blur-md z-30 shadow-lg">
+                     {file.type === FileType.VIDEO ? <Video size={14} className="text-white"/> : <Music size={14} className="text-white"/>}
+                 </div>
+             )}
+        </div>
+    );
+};
+
 // Message Group Card Component
 const MessageCard: React.FC<{
     group: { id: string; files: TdFile[]; text?: string; date: number };
@@ -112,15 +205,6 @@ const MessageCard: React.FC<{
         return mb < 1 ? `${(bytes/1024).toFixed(1)} KB` : `${mb.toFixed(1)} MB`;
     };
 
-    const getFileIcon = (type: FileType) => {
-        switch(type) {
-          case FileType.IMAGE: return <ImageIcon size={20} className="text-purple-400" />;
-          case FileType.VIDEO: return <Video size={20} className="text-rose-400" />;
-          case FileType.MUSIC: return <Music size={20} className="text-amber-400" />;
-          default: return <FileText size={20} className="text-blue-400" />;
-        }
-    };
-    
     return (
         <div className="bg-[#151e32] border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition-colors animate-fade-in flex flex-col">
             {/* Card Header */}
@@ -162,7 +246,6 @@ const MessageCard: React.FC<{
                 {/* Media Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                     {group.files.map(file => {
-                        const imageUrl = file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null;
                         const isSelected = selectedFiles.includes(file.id);
 
                         return (
@@ -171,26 +254,18 @@ const MessageCard: React.FC<{
                                 onClick={() => toggleSelection(file.id)}
                                 className={`relative aspect-square rounded-xl overflow-hidden cursor-pointer group/file border ${isSelected ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-700 bg-slate-800'}`}
                             >
-                                {imageUrl ? (
-                                    <div className="w-full h-full relative">
-                                        <img src={imageUrl} alt={file.name} className="w-full h-full object-cover" loading="lazy" />
-                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/file:opacity-100 transition-opacity"></div>
-                                    </div>
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center bg-slate-800">
-                                        {getFileIcon(file.type)}
-                                    </div>
-                                )}
+                                {/* Thumbnail Component handles request & display */}
+                                <FileThumbnail file={file} />
                                 
                                 {/* Selection Check */}
-                                <div className={`absolute top-2 left-2 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover/file:opacity-100'} transition-opacity`}>
+                                <div className={`absolute top-2 left-2 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover/file:opacity-100'} transition-opacity z-40`}>
                                      <div className={`w-5 h-5 rounded border bg-slate-900 flex items-center justify-center ${isSelected ? 'border-blue-500 text-blue-500' : 'border-slate-500 text-slate-500'}`}>
                                          {isSelected && <CheckSquare size={12} />}
                                      </div>
                                 </div>
 
                                 {/* Single DL Button */}
-                                <div className="absolute bottom-2 right-2 opacity-0 group-hover/file:opacity-100 transition-opacity">
+                                <div className="absolute bottom-2 right-2 opacity-0 group-hover/file:opacity-100 transition-opacity z-40">
                                     <button 
                                       onClick={(e) => { e.stopPropagation(); onDownloadFile(file.id, file.name, file.size); }}
                                       className="p-1.5 bg-slate-900/80 hover:bg-blue-600 text-white rounded-lg backdrop-blur-sm"
@@ -200,7 +275,7 @@ const MessageCard: React.FC<{
                                 </div>
                                 
                                 {/* File Info Badge */}
-                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6 pointer-events-none">
+                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6 pointer-events-none z-30">
                                     <p className="text-[10px] text-slate-300 truncate font-mono">{file.name}</p>
                                     <p className="text-[9px] text-slate-400">{formatSize(file.size)}</p>
                                 </div>
@@ -265,15 +340,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   useEffect(() => {
     // When Chat ID changes, we do a default fetch (Limited 500, no date filters)
-    // We also want to reset the date inputs to avoid confusion, or keep them?
-    // User expectation usually: switch chat -> see recent files.
     if (chatId) {
-        // Reset dates visual state? Optional. Let's keep them but NOT use them unless user explicitly asks?
-        // Actually, if dates are set, user probably expects them to apply to new chat.
-        // But the requirement says "Limit 500 is only when clicking the group". 
-        // This implies resetting to "Default View".
-        
-        // Let's reset dates for a fresh start in new chat
         setStartD({y: '', m: '', d: ''});
         setEndD({y: '', m: '', d: ''});
         
@@ -287,9 +354,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       const startValid = startD.y.length===4 && startD.m.length===2 && startD.d.length===2;
       const endValid = endD.y.length===4 && endD.m.length===2 && endD.d.length===2;
       
-      // Only auto-trigger if BOTH are set (range) or strictly valid dates
       if (chatId && startValid && endValid) {
-          fetchFiles(false); // fetchFiles logic will see the dates and set limit to 0
+          fetchFiles(false); 
       }
   }, [startD, endD]);
 
@@ -392,7 +458,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const handleClearDates = () => {
       setStartD({y: '', m: '', d: ''});
       setEndD({y: '', m: '', d: ''});
-      // Fetch default 500 when clearing dates?
       fetchFiles(false, undefined, undefined);
   };
 

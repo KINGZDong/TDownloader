@@ -63,6 +63,11 @@ class ApiService {
       this.emitEvent('download_complete', data);
     });
     
+    // Thumbnail Update
+    this.socket.on('thumbnail_ready', (data: { fileId: number, data: string }) => {
+        this.emitEvent('thumbnail_ready', data);
+    });
+    
     this.socket.on('config_update', (config: any) => {
       this.emitEvent('config_update', config);
     });
@@ -77,7 +82,7 @@ class ApiService {
 
     this.socket.on('error', (err: string) => {
       console.error('Backend error:', err);
-      alert('Backend Error: ' + err);
+      // alert('Backend Error: ' + err);
     });
   }
 
@@ -143,8 +148,6 @@ class ApiService {
   }
 
   async logout(): Promise<void> {
-    // Legacy logout - maps to remove current session
-    // But now we usually want switchAccount
     this.socket.emit('logout'); 
     window.location.reload();
   }
@@ -155,6 +158,11 @@ class ApiService {
 
   async getFiles(chatId: number, startDate?: number, endDate?: number, limit?: number): Promise<void> {
     this.socket.emit('get_files', { chatId, startDate, endDate, limit });
+  }
+
+  // Request a high-quality thumbnail (not the minithumbnail)
+  async requestThumbnail(fileId: number): Promise<void> {
+      this.socket.emit('request_thumbnail', fileId);
   }
 
   async setProxy(config: ProxyConfig): Promise<void> {

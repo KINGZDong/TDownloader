@@ -227,7 +227,7 @@ async function initializeClient(sessionId: string) {
              io.emit('connection_state_update', { state: simpleState });
         }
         
-        // File Updates
+        // File Updates (Only for download progress, not for thumbnails generally)
         if (update._ === 'updateFile') {
             handleFileUpdate(update.file);
         }
@@ -238,12 +238,12 @@ async function initializeClient(sessionId: string) {
         await client.connect();
     } catch (e) {
         console.error("❌ TDLib connect error (Likely network issue, waiting for proxy...):", e);
-        // Do NOT re-throw. We want the server to stay alive so socket.io can receive set_proxy.
     }
 }
 
-// --- File Handling Helper (Moved from previous listener) ---
+// --- File Handling Helper ---
 function handleFileUpdate(file: any) {
+    // 1. Handle Active Main Downloads
     let downloadInfo = activeDownloads.get(file.id);
 
     if (downloadInfo || file.local.is_downloading_active) {
@@ -315,10 +315,25 @@ function handleFileUpdate(file: any) {
          }
        }
     }
+
+    // 2. Handle Thumbnail Downloads
+    // If a file finishes downloading and it is NOT in activeDownloads, it might be a thumbnail request
+    if (file.local.is_downloading_completed && !downloadInfo) {
+        // Read file and check if we should emit it
+        // We can optimize this by maintaining a set of "pendingThumbnails", but sending it generally is safer for now
+        // To be safe, we check if file size is small (thumbnails are small)
+        if (file.size < 1024 * 1024) { // < 1MB
+            try {
+                if (fs.existsSync(file.local.path)) {
+                    const data = fs.readFileSync(file.local.path).toString('base64');
+                    io.emit('thumbnail_ready', { fileId: file.id, data: data });
+                }
+            } catch (e) { }
+        }
+    }
 }
 
 // --- Helper Functions (Mappings) ---
-// (Keep mapChat, mapMessageToFile, openFolder as they were, just ensure they are defined)
 function mapChat(chat: any): any {
   let type = 'private';
   if (chat.type._ === 'chatTypeSupergroup' || chat.type._ === 'chatTypeBasicGroup') {
@@ -340,26 +355,49 @@ function mapMessageToFile(message: any): any | null {
   let fileData = null;
   let fileType = 'Document';
   let thumbnail = null;
+  let thumbnailFileId = undefined; // ID of the 'm' or 's' size photo
   let text = '';
 
   if (content.caption && content.caption.text) text = content.caption.text;
 
   if (content._ === 'messagePhoto') {
-    const photo = content.photo.sizes[content.photo.sizes.length - 1];
+    // 1. The main file to download is the largest one (last in sizes)
+    const photoSizes = content.photo.sizes;
+    const photo = photoSizes[photoSizes.length - 1];
     fileData = photo.photo;
     fileType = 'Image';
+    
+    // 2. The minithumbnail (blurry)
     if (content.photo.minithumbnail) thumbnail = content.photo.minithumbnail.data;
+    
+    // 3. The large thumbnail for preview download (Prioritize 'x' > 'm' > 's')
+    // 'y' is too big (full size), 'x' is typically 800px which is perfect for sharp thumbnails
+    const previewSize = photoSizes.find((s: any) => s.type === 'x') || 
+                        photoSizes.find((s: any) => s.type === 'm') || 
+                        photoSizes.find((s: any) => s.type === 's');
+    
+    if (previewSize) {
+        thumbnailFileId = previewSize.photo.id;
+    }
+
   } else if (content._ === 'messageVideo') {
     fileData = content.video.video;
     fileType = 'Video';
     if (content.video.minithumbnail) thumbnail = content.video.minithumbnail.data;
+    if (content.video.thumbnail) thumbnailFileId = content.video.thumbnail.photo.id;
+
   } else if (content._ === 'messageDocument') {
     fileData = content.document.document;
     fileType = 'Document';
     if (content.document.minithumbnail) thumbnail = content.document.minithumbnail.data;
+    if (content.document.thumbnail) thumbnailFileId = content.document.thumbnail.photo.id;
+
   } else if (content._ === 'messageAudio') {
     fileData = content.audio.audio;
     fileType = 'Music';
+    // Audio usually has album art in 'album_cover_thumbnail'
+    if (content.audio.album_cover_thumbnail) thumbnailFileId = content.audio.album_cover_thumbnail.photo.id;
+    if (content.audio.minithumbnail) thumbnail = content.audio.minithumbnail.data; // rare for audio
   }
 
   if (!fileData) return null;
@@ -375,7 +413,8 @@ function mapMessageToFile(message: any): any | null {
     size: fileData.expected_size,
     date: message.date,
     type: fileType,
-    thumbnail: thumbnail, 
+    thumbnail: thumbnail, // Base64 blurry
+    thumbnailFileId: thumbnailFileId, // ID for high-res preview
     path: fileData.local.path, 
     isDownloading: fileData.local.is_downloading_active,
     isDownloaded: isDownloaded
@@ -385,7 +424,6 @@ function mapMessageToFile(message: any): any | null {
 function openFolder(targetPath: string) {
    let p = targetPath;
    if (!fs.existsSync(p)) p = appConfig.downloadPath; 
-   // ... (same as before)
    let command = '';
     switch (os.platform()) {
       case 'win32': command = `explorer "${p}"`; break;
@@ -400,10 +438,7 @@ function openFolder(targetPath: string) {
 io.on('connection', (socket) => {
     // Basic Handlers
     socket.emit('sessions_list_update', loadSessionsMetadata());
-    if (client) {
-         // If client active, send state
-         // We might need to manually trigger auth update if state is stable
-    }
+    if (client) { }
 
     socket.on('get_saved_accounts', () => {
         socket.emit('sessions_list_update', loadSessionsMetadata());
@@ -413,7 +448,6 @@ io.on('connection', (socket) => {
     socket.on('create_new_session', async () => {
         const newId = `session_${Date.now()}`;
         await initializeClient(newId);
-        // New client starts in LOGGED_OUT state
     });
 
     socket.on('login_session', async (sessionId: string) => {
@@ -421,44 +455,32 @@ io.on('connection', (socket) => {
     });
     
     socket.on('remove_session', async (sessionId: string) => {
-        // If removing current session, close client
         if (currentSessionId === sessionId && client) {
-             try { await client.invoke({ _: 'logOut' }); } catch {} // Try to notify telegram
+             try { await client.invoke({ _: 'logOut' }); } catch {} 
              await client.close();
              client = null;
              currentSessionId = null;
         } else {
-             // If removing inactive session, we just delete the folder (or maybe just metadata?)
-             // Ideally we should start a temporary client to logOut, but simply deleting files works for "forgetting"
              const dbDir = path.join(SESSIONS_DIR, sessionId);
              fs.rmSync(dbDir, { recursive: true, force: true });
         }
-
         const sessions = loadSessionsMetadata().filter(s => s.id !== sessionId);
         saveSessionsMetadata(sessions);
         socket.emit('sessions_list_update', sessions);
     });
     
     socket.on('switch_account_disconnect', async () => {
-        // Just stop the client, don't delete data
         if (client) {
             await client.close();
             client = null;
             currentSessionId = null;
-            socket.emit('auth_update', { state: 'LOGGED_OUT' }); // Technically not logged out of TG, but disconnected from UI
+            socket.emit('auth_update', { state: 'LOGGED_OUT' }); 
         }
     });
 
-    // ------------------------------------------
-    // Existing TDLib passthroughs (Auth, Chat, File)
-    // ------------------------------------------
-    
     // Auth
     socket.on('get_auth_state', async () => {
         if (!client) {
-             // If no client is active, we are in "Select Account" mode basically. 
-             // We can emit a special state or just LOGGED_OUT but with context.
-             // For now, let's assume if no client, we are waiting for user to select session.
              socket.emit('auth_update', { state: 'LOGGED_OUT' }); 
              return;
         }
@@ -481,7 +503,6 @@ io.on('connection', (socket) => {
         } catch (e) { console.error(e); }
     });
 
-    // Scan Logic (Modified to check client existence)
     socket.on('get_files', async (params) => {
         if (!client) return;
         currentScanRequestId++;
@@ -492,8 +513,6 @@ io.on('connection', (socket) => {
         const limit = (typeof params === 'object' && params.limit) ? params.limit : 0;
 
         try {
-             // ... (Keep existing get_files logic exactly as is, just wrapped in try/catch and using `client`)
-             // Copied logic for brevity in XML, but logically identical
              let lastMessageId = 0; 
              let totalFetched = 0;
              let totalFoundFiles = 0;
@@ -556,6 +575,31 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Thumbnail Request Handler
+    socket.on('request_thumbnail', async (fileId) => {
+        if (!client || !fileId) return;
+        
+        // Check if file is already downloaded (optimization)
+        try {
+            const fileInfo = await client.invoke({ _: 'getFile', file_id: fileId });
+            if (fileInfo.local.is_downloading_completed && fs.existsSync(fileInfo.local.path)) {
+                 const data = fs.readFileSync(fileInfo.local.path).toString('base64');
+                 socket.emit('thumbnail_ready', { fileId: fileId, data: data });
+                 return;
+            }
+            
+            // If not, trigger download with priority 1 (High Priority for Thumbnails)
+            await client.invoke({ 
+                _: 'downloadFile', 
+                file_id: fileId, 
+                priority: 1, // 1=top. Ensure it jumps the queue.
+                offset: 0, 
+                limit: 0, 
+                synchronous: false 
+            });
+        } catch (e) { console.error('Error fetching thumbnail:', e); }
+    });
+
     // Download handlers
     socket.on('download_file', async (p) => { 
         if(client) {
@@ -563,7 +607,6 @@ io.on('connection', (socket) => {
             client.invoke({ _: 'downloadFile', file_id: p.fileId, priority: 1, offset: 0, limit: 0, synchronous: false }).catch(console.error);
         }
     });
-    // ... (Other download handlers pass through to client similar to above)
     socket.on('cancel_download', async (fileId) => {
         if(client) {
              try { await client.invoke({ _: 'cancelDownloadFile', file_id: fileId, only_if_pending: false }); } catch {}
@@ -576,70 +619,34 @@ io.on('connection', (socket) => {
     socket.on('get_config', () => socket.emit('config_update', appConfig));
     socket.on('update_config', (c) => { if (c.downloadPath) appConfig.downloadPath = c.downloadPath; socket.emit('config_update', appConfig); });
     socket.on('open_file_folder', ({path}) => openFolder(path));
-    socket.on('select_directory', () => { /* ... exec logic ... */ }); // (Keep existing)
+    socket.on('select_directory', () => { /* ... exec logic ... */ }); 
     
-    // Proxy (Apply to current client if exists)
+    // Proxy
     socket.on('set_proxy', async (config) => {
         if (!client) return; 
-        
-        // 1. Disable existing proxy
-        try { 
-            await client.invoke({ _: 'disableProxy' }); 
-            console.log('Old proxy disabled');
-        } catch(e) { console.error('Error disabling proxy', e); }
-
+        try { await client.invoke({ _: 'disableProxy' }); console.log('Old proxy disabled'); } catch(e) { console.error('Error disabling proxy', e); }
         if (!config.enabled) return;
-
-        // 2. Build new proxy type
         let typeClass: any;
         if (config.type === 'socks5') {
-            typeClass = {
-                _: 'proxyTypeSocks5',
-                username: config.username || '',
-                password: config.password || ''
-            };
+            typeClass = { _: 'proxyTypeSocks5', username: config.username || '', password: config.password || '' };
         } else if (config.type === 'http') {
-            typeClass = {
-                _: 'proxyTypeHttp',
-                username: config.username || '',
-                password: config.password || '',
-                http_only: false // usually supports https too
-            };
+            typeClass = { _: 'proxyTypeHttp', username: config.username || '', password: config.password || '', http_only: false };
         } else if (config.type === 'mtproto') {
-            typeClass = {
-                _: 'proxyTypeMtproto',
-                secret: config.secret || ''
-            };
+            typeClass = { _: 'proxyTypeMtproto', secret: config.secret || '' };
         }
-
-        // 3. Add new proxy
         try {
             console.log(`Setting proxy: ${config.type}://${config.host}:${config.port}`);
-            await client.invoke({
-                _: 'addProxy',
-                server: config.host,
-                port: config.port,
-                enable: true,
-                type: typeClass
-            });
+            await client.invoke({ _: 'addProxy', server: config.host, port: config.port, enable: true, type: typeClass });
             console.log('✅ Proxy applied successfully!');
-        } catch (e) {
-            console.error('❌ Failed to set proxy:', e);
-        }
+        } catch (e) { console.error('❌ Failed to set proxy:', e); }
     });
 });
 
-// STARTUP: 
-// Check if we have a last active session or default session to auto-load?
-// For "Browser Cookie" feel, we usually don't auto-load if multiple exist, 
-// OR we load the most recent. Let's load the most recent one.
 const sessions = loadSessionsMetadata();
 if (sessions.length > 0) {
-    // Sort by lastActive desc
     sessions.sort((a, b) => b.lastActive - a.lastActive);
     initializeClient(sessions[0].id);
 } else {
-    // No sessions, start a default new one
     initializeClient('default_session');
 }
 

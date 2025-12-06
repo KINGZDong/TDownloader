@@ -37,6 +37,7 @@ export interface TdFile {
   type: FileType;
   path?: string; // Local path if downloaded
   thumbnail?: string; // Base64 minithumbnail (fallback)
+  thumbnailFileId?: number; // ID for the medium/high quality thumbnail file
   isDownloading?: boolean;
   isDownloaded?: boolean; // True if the full file exists locally
 }
