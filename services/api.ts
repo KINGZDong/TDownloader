@@ -30,12 +30,29 @@ class ApiService {
       this.emitEvent('auth_update', data);
     });
 
+    this.socket.on('connection_state_update', (data: { state: string }) => {
+      this.emitEvent('connection_state_update', data.state);
+    });
+
     this.socket.on('chats_update', (chats: Chat[]) => {
       this.emitEvent('chats_update', chats);
     });
 
     this.socket.on('files_update', (files: TdFile[]) => {
       this.emitEvent('files_update', files);
+    });
+    
+    // Batch Loading Events
+    this.socket.on('files_batch', (files: TdFile[]) => {
+      this.emitEvent('files_batch', files);
+    });
+    
+    this.socket.on('scan_progress', (progress: { scanned: number, found: number, active: boolean }) => {
+      this.emitEvent('scan_progress', progress);
+    });
+    
+    this.socket.on('files_end', () => {
+      this.emitEvent('files_end', null);
     });
 
     this.socket.on('download_progress', (task: DownloadTask) => {
@@ -46,6 +63,14 @@ class ApiService {
       this.emitEvent('download_complete', data);
     });
     
+    this.socket.on('config_update', (config: any) => {
+      this.emitEvent('config_update', config);
+    });
+    
+    this.socket.on('directory_selected', (path: string) => {
+      this.emitEvent('directory_selected', path);
+    });
+
     this.socket.on('error', (err: string) => {
       console.error('Backend error:', err);
       alert('Backend Error: ' + err);
@@ -127,6 +152,22 @@ class ApiService {
 
   async clearCompleted() {
     this.socket.emit('clear_completed_downloads');
+  }
+
+  async openFileFolder(path: string) {
+    this.socket.emit('open_file_folder', { path });
+  }
+
+  async selectDirectory() {
+    this.socket.emit('select_directory');
+  }
+
+  async getAppConfig() {
+    this.socket.emit('get_config');
+  }
+
+  async updateAppConfig(config: { downloadPath?: string }) {
+    this.socket.emit('update_config', config);
   }
 }
 

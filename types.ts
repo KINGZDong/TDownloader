@@ -1,3 +1,4 @@
+
 export enum AuthState {
   LOGGED_OUT = 'LOGGED_OUT',
   AWAITING_CODE = 'AWAITING_CODE',
@@ -32,8 +33,9 @@ export interface TdFile {
   date: number; // timestamp
   type: FileType;
   path?: string; // Local path if downloaded
-  thumbnail?: string; // Base64 or path
+  thumbnail?: string; // Base64 minithumbnail (fallback)
   isDownloading?: boolean;
+  isDownloaded?: boolean; // True if the full file exists locally
 }
 
 export interface DownloadTask {
@@ -54,4 +56,8 @@ export interface ProxyConfig {
   username?: string;
   password?: string;
   secret?: string; // for MTProto
+}
+
+export interface ConnectionState {
+  state: 'waiting_for_network' | 'connecting_to_proxy' | 'connecting' | 'updating' | 'ready' | 'unknown';
 }

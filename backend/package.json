@@ -2,9 +2,10 @@
   "name": "tdownloader-backend",
   "version": "1.0.0",
   "description": "Backend for TDownloader using TDLib",
+  "type": "module",
   "main": "server.ts",
   "scripts": {
-    "start": "ts-node server.ts"
+    "start": "ts-node --esm server.ts"
   },
   "dependencies": {
     "socket.io": "^4.7.5",

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TdFile, FileType, Chat } from '../types';
-import { Search, Filter, Calendar, FileIcon, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive } from 'lucide-react';
+import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2 } from 'lucide-react';
 import { api } from '../services/api';
 
 interface FileBrowserProps {
@@ -11,12 +11,15 @@ interface FileBrowserProps {
 const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [files, setFiles] = useState<TdFile[]>([]);
   const [loading, setLoading] = useState(false);
+  const [scanStatus, setScanStatus] = useState({ scanned: 0, found: 0, active: false });
   
   // Filters
   const [filterType, setFilterType] = useState<FileType>(FileType.ALL);
   const [searchQuery, setSearchQuery] = useState('');
   const [minSize, setMinSize] = useState(0); // in MB
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const activeChat = chats.find(c => c.id === chatId);
 
@@ -25,20 +28,42 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       setLoading(true);
       setFiles([]); 
       setSelectedFiles([]);
+      setScanStatus({ scanned: 0, found: 0, active: true });
       
-      // Request files from backend
       api.getFiles(chatId);
       
-      // Setup temporary listener for file results
+      // Handle legacy single-update event (backup)
       const handleFilesUpdate = (newFiles: TdFile[]) => {
         setFiles(newFiles);
         setLoading(false);
       };
 
+      // Handle batched updates for infinite loading
+      const handleFilesBatch = (newBatch: TdFile[]) => {
+        setFiles(prev => [...prev, ...newBatch]);
+      };
+
+      // Handle scan progress
+      const handleScanProgress = (status: { scanned: number, found: number, active: boolean }) => {
+          setScanStatus(status);
+          if (status.active) setLoading(true);
+      };
+
+      const handleFilesEnd = () => {
+        setLoading(false);
+        setScanStatus(prev => ({ ...prev, active: false }));
+      };
+
       api.on('files_update', handleFilesUpdate);
+      api.on('files_batch', handleFilesBatch);
+      api.on('scan_progress', handleScanProgress);
+      api.on('files_end', handleFilesEnd);
 
       return () => {
         api.off('files_update', handleFilesUpdate);
+        api.off('files_batch', handleFilesBatch);
+        api.off('scan_progress', handleScanProgress);
+        api.off('files_end', handleFilesEnd);
       };
     }
   }, [chatId]);
@@ -48,7 +73,28 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
     const matchesType = filterType === FileType.ALL || file.type === filterType;
     const matchesSearch = file.name.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesSize = (file.size / 1024 / 1024) >= minSize;
-    return matchesType && matchesSearch && matchesSize;
+    
+    // Date Filtering
+    let matchesDate = true;
+    if (startDate || endDate) {
+        // file.date is Unix timestamp in seconds, convert to milliseconds
+        const fileDate = new Date(file.date * 1000);
+        fileDate.setHours(0,0,0,0); // normalize time part
+
+        if (startDate) {
+            const start = new Date(startDate);
+            start.setHours(0,0,0,0);
+            if (fileDate.getTime() < start.getTime()) matchesDate = false;
+        }
+        
+        if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(0,0,0,0);
+            if (fileDate.getTime() > end.getTime()) matchesDate = false;
+        }
+    }
+
+    return matchesType && matchesSearch && matchesSize && matchesDate;
   });
 
   const toggleSelection = (id: number) => {
@@ -84,163 +130,251 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   const getFileIcon = (type: FileType) => {
     switch(type) {
-      case FileType.IMAGE: return <ImageIcon size={24} className="text-purple-500" />;
-      case FileType.VIDEO: return <Video size={24} className="text-red-500" />;
-      case FileType.MUSIC: return <Music size={24} className="text-blue-500" />;
-      default: return <FileIcon size={24} className="text-slate-500" />;
+      case FileType.IMAGE: return <ImageIcon size={28} className="text-purple-400" />;
+      case FileType.VIDEO: return <Video size={28} className="text-rose-400" />;
+      case FileType.MUSIC: return <Music size={28} className="text-amber-400" />;
+      default: return <FileText size={28} className="text-blue-400" />;
     }
+  };
+
+  const getImageUrl = (file: TdFile) => {
+    if (file.thumbnail) {
+        return `data:image/jpeg;base64,${file.thumbnail}`;
+    }
+    return null;
   };
 
   if (!chatId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 text-slate-400">
-        <DownloadCloud size={64} className="mb-4 opacity-50" />
-        <h2 className="text-xl font-medium">Select a chat to view files</h2>
+      <div className="flex-1 flex flex-col items-center justify-center bg-[#0B1120] text-slate-400 p-8 text-center animate-fade-in">
+        <div className="w-24 h-24 bg-slate-900 rounded-full flex items-center justify-center mb-6 shadow-inner border border-slate-800">
+           <DownloadCloud size={48} className="text-slate-600" />
+        </div>
+        <h2 className="text-2xl font-bold text-slate-200 mb-2">Ready to explore</h2>
+        <p className="max-w-md text-slate-500">Select a chat from the sidebar to start browsing and downloading media files securely.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-slate-50">
-      {/* Top Bar: Chat Info & Filters */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 shadow-sm z-10">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-slate-800">{activeChat?.title}</h2>
-          <div className="flex gap-2 text-sm text-slate-500">
-            <span>{filteredFiles.length} files found</span>
-          </div>
-        </div>
-
-        {/* Filter Controls */}
-        <div className="flex flex-wrap gap-4 items-center">
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
-            <input 
-              type="text" 
-              placeholder="Filter by name..." 
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="pl-9 pr-3 py-2 bg-slate-100 border-none rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64"
-            />
-          </div>
-
-          {/* Type Tabs */}
-          <div className="flex bg-slate-100 p-1 rounded-lg">
-            {Object.values(FileType).map(type => (
-              <button
-                key={type}
-                onClick={() => setFilterType(type)}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${filterType === type ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-
-          {/* Size Filter */}
-          <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-lg text-sm text-slate-600">
-            <HardDrive size={16} />
-            <span>Min: {minSize} MB</span>
-            <input 
-              type="range" 
-              min="0" 
-              max="50" 
-              value={minSize} 
-              onChange={e => setMinSize(parseInt(e.target.value))}
-              className="w-24 h-1 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-blue-600"
-            />
-          </div>
-        </div>
-        
-        {/* Bulk Actions */}
-        <div className="mt-4 flex items-center justify-between border-t pt-4 border-slate-100">
+    <div className="flex-1 flex flex-col h-screen bg-[#0B1120] relative">
+      {/* Glassmorphism Header */}
+      <div className="bg-[#0f172a]/90 backdrop-blur-md border-b border-slate-800 px-8 py-5 shadow-sm z-10 sticky top-0 transition-all">
+        <div className="flex justify-between items-center mb-6">
           <div className="flex items-center gap-3">
+             <div>
+                <h2 className="text-2xl font-bold text-slate-100 tracking-tight">{activeChat?.title}</h2>
+                <div className="flex gap-2 text-sm text-slate-500 mt-1 items-center">
+                    <span className="font-medium text-slate-400">{filteredFiles.length}</span> results found
+                    {scanStatus.active && (
+                        <div className="flex items-center gap-1.5 ml-2 text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full animate-pulse">
+                            <Loader2 size={10} className="animate-spin" />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">Scanning History...</span>
+                        </div>
+                    )}
+                </div>
+             </div>
+          </div>
+          
+          <div className="flex gap-3">
+             <button 
+               onClick={handleDownloadSelected}
+               disabled={selectedFiles.length === 0}
+               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-sm transform active:scale-95 ${selectedFiles.length > 0 ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-500/25' : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'}`}
+             >
+                <ArrowDownToLine size={18} />
+                Download {selectedFiles.length > 0 ? `(${selectedFiles.length})` : ''}
+             </button>
+          </div>
+        </div>
+
+        {/* Filter Bar */}
+        <div className="flex flex-wrap gap-4 items-center justify-between">
+          <div className="flex gap-4 items-center flex-wrap">
+            {/* Search */}
+            <div className="relative group">
+              <Search className="absolute left-3 top-2.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
+              <input 
+                type="text" 
+                placeholder="Search files..." 
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="pl-10 pr-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-200 focus:bg-slate-800 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 outline-none w-64 transition-all placeholder-slate-600"
+              />
+            </div>
+
+            {/* Type Tabs */}
+            <div className="flex bg-slate-900 border border-slate-800 p-1 rounded-xl">
+              {Object.values(FileType).map(type => (
+                <button
+                  key={type}
+                  onClick={() => setFilterType(type)}
+                  className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${filterType === type ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'}`}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+            
+            {/* Date Picker */}
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl text-slate-400">
+               <Calendar size={16} className="ml-2" />
+               <input 
+                  type="date" 
+                  value={startDate}
+                  onChange={e => setStartDate(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-200 focus:outline-none w-28 calendar-input"
+                  placeholder="Start"
+               />
+               <span className="text-slate-600">-</span>
+               <input 
+                  type="date" 
+                  value={endDate}
+                  onChange={e => setEndDate(e.target.value)}
+                  className="bg-transparent border-none text-xs text-slate-200 focus:outline-none w-28 calendar-input"
+               />
+            </div>
+          </div>
+
+          <div className="flex gap-4 items-center">
+             {/* Select All */}
              <button 
                onClick={handleSelectAll}
-               className="flex items-center gap-2 text-sm text-slate-600 hover:text-blue-600"
+               className="flex items-center gap-2 text-sm text-slate-500 hover:text-blue-400 transition-colors px-2 py-1 rounded-lg hover:bg-slate-900"
              >
-               {selectedFiles.length === filteredFiles.length && filteredFiles.length > 0 ? <CheckSquare size={18} /> : <Square size={18} />}
-               Select All
+               {selectedFiles.length === filteredFiles.length && filteredFiles.length > 0 ? <CheckSquare size={18} className="text-blue-500" /> : <Square size={18} />}
+               <span className="font-medium">Select All</span>
              </button>
-             {selectedFiles.length > 0 && (
-               <span className="text-sm font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
-                 {selectedFiles.length} selected
-               </span>
-             )}
+
+             {/* Size Filter */}
+             <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-sm text-slate-400 shadow-sm">
+                <HardDrive size={16} className="text-slate-600" />
+                <div className="flex flex-col">
+                   <span className="text-[10px] uppercase font-bold text-slate-600 tracking-wider">Min Size</span>
+                   <div className="flex items-center gap-2">
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="50" 
+                        value={minSize} 
+                        onChange={e => setMinSize(parseInt(e.target.value))}
+                        className="w-20 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      />
+                      <span className="font-mono text-xs w-10 text-right">{minSize} MB</span>
+                   </div>
+                </div>
+             </div>
           </div>
-          <button 
-            onClick={handleDownloadSelected}
-            disabled={selectedFiles.length === 0}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${selectedFiles.length > 0 ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
-          >
-            <DownloadCloud size={18} />
-            Download Selected
-          </button>
         </div>
       </div>
 
       {/* Grid Content */}
-      <div className="flex-1 overflow-y-auto p-6 custom-scrollbar pb-24">
-        {loading ? (
-          <div className="flex justify-center items-center h-full">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="flex-1 overflow-y-auto p-8 custom-scrollbar pb-32">
+        {files.length === 0 && loading ? (
+          <div className="flex flex-col justify-center items-center h-64 animate-fade-in">
+            <div className="animate-spin rounded-full h-10 w-10 border-4 border-slate-800 border-t-blue-600 mb-4"></div>
+            <p className="text-slate-500 font-medium">Starting chat scan...</p>
           </div>
-        ) : filteredFiles.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400">
-            <Filter size={48} className="mb-4 opacity-30" />
-            <p>No files match your filters</p>
+        ) : filteredFiles.length === 0 && !loading ? (
+          <div className="flex flex-col items-center justify-center h-96 text-slate-500 animate-fade-in">
+            <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mb-4 border border-slate-800">
+               <Filter size={32} className="opacity-40" />
+            </div>
+            <p className="text-lg font-medium text-slate-400">No matching files found</p>
+            <p className="text-sm opacity-60">Try adjusting your filters or search query.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {filteredFiles.map(file => (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6">
+            {filteredFiles.map((file, index) => {
+              const imageUrl = getImageUrl(file);
+              
+              return (
               <div 
                 key={file.id} 
                 onClick={() => toggleSelection(file.id)}
-                className={`group relative bg-white rounded-xl border transition-all duration-200 cursor-pointer overflow-hidden ${selectedFiles.includes(file.id) ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-200 hover:border-blue-300 hover:shadow-md'}`}
+                className={`group animate-fade-in relative bg-[#151e32] rounded-2xl transition-all duration-300 cursor-pointer overflow-hidden border ${selectedFiles.includes(file.id) ? 'ring-2 ring-blue-500 shadow-lg shadow-blue-500/20 translate-y-[-4px] border-blue-500' : 'border-slate-800/60 hover:shadow-xl hover:shadow-black/20 hover:translate-y-[-4px] hover:border-slate-700'}`}
               >
-                {/* Thumbnail / Icon Area */}
-                <div className="h-32 bg-slate-100 flex items-center justify-center relative">
-                  {file.thumbnail ? (
-                    <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt={file.name} className="w-full h-full object-cover" />
+                {/* Thumbnail Area */}
+                <div className={`h-40 flex items-center justify-center relative overflow-hidden ${imageUrl ? 'bg-black' : 'bg-slate-900/50'}`}>
+                  {imageUrl ? (
+                    <>
+                       {/* Background Blur */}
+                       <div className="absolute inset-0 bg-cover bg-center blur-xl opacity-50 scale-110" style={{ backgroundImage: `url(${imageUrl})` }}></div>
+                       {/* Actual Image */}
+                       <img 
+                          src={imageUrl} 
+                          alt={file.name} 
+                          className="relative h-full w-full object-contain z-10 transition-transform duration-500 group-hover:scale-105" 
+                          loading="lazy"
+                        />
+                    </>
                   ) : (
-                    getFileIcon(file.type)
-                  )}
-                  {/* Overlay Checkbox */}
-                  <div className={`absolute top-2 left-2 transition-opacity ${selectedFiles.includes(file.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                    <div className={`w-5 h-5 rounded border bg-white flex items-center justify-center ${selectedFiles.includes(file.id) ? 'border-blue-600' : 'border-slate-300'}`}>
-                      {selectedFiles.includes(file.id) && <div className="w-3 h-3 bg-blue-600 rounded-sm" />}
+                    <div className="transform transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
+                       {getFileIcon(file.type)}
                     </div>
+                  )}
+                  
+                  {/* Overlay Gradient */}
+                  <div className={`absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 transition-opacity duration-300 ${selectedFiles.includes(file.id) ? 'opacity-100' : 'group-hover:opacity-100'}`}></div>
+
+                  {/* Checkbox */}
+                  <div className={`absolute top-3 left-3 transition-all duration-200 z-20 ${selectedFiles.includes(file.id) ? 'opacity-100 scale-100' : 'opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100'}`}>
+                    <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${selectedFiles.includes(file.id) ? 'bg-blue-600 border-blue-600' : 'bg-slate-900/90 border-slate-500 hover:border-blue-400'}`}>
+                      {selectedFiles.includes(file.id) && <CheckSquare size={14} className="text-white" />}
+                    </div>
+                  </div>
+                  
+                  {/* Download Action (Hover) */}
+                  <div className="absolute bottom-3 right-3 z-20 translate-y-10 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
+                     <button 
+                       onClick={(e) => { e.stopPropagation(); api.startDownload(file.id, file.name, file.size); }}
+                       className="bg-blue-600 text-white p-2.5 rounded-full shadow-lg hover:bg-blue-500 transition-colors"
+                       title="Download Now"
+                     >
+                       <DownloadCloud size={18} />
+                     </button>
                   </div>
                 </div>
 
                 {/* File Details */}
-                <div className="p-3">
-                   <div className="flex justify-between items-start mb-1">
-                      <h3 className="text-sm font-medium text-slate-700 truncate w-full" title={file.name}>{file.name}</h3>
+                <div className="p-4 relative z-10">
+                   <div className="flex justify-between items-start mb-1.5">
+                      <h3 className="text-sm font-semibold text-slate-200 truncate w-full pr-2" title={file.name}>{file.name}</h3>
                    </div>
-                   <div className="flex justify-between items-center text-xs text-slate-500">
-                     <span>{formatSize(file.size)}</span>
+                   <div className="flex justify-between items-center text-xs text-slate-500 font-medium">
+                     <span className="bg-slate-800 px-2 py-0.5 rounded text-slate-400 border border-slate-700/50">{formatSize(file.size)}</span>
                      <span>{new Date(file.date * 1000).toLocaleDateString()}</span>
                    </div>
                 </div>
-                
-                {/* Hover Download Button */}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                  {!selectedFiles.includes(file.id) && (
-                     <button 
-                       onClick={(e) => { e.stopPropagation(); api.startDownload(file.id, file.name, file.size); }}
-                       className="pointer-events-auto bg-white text-blue-600 p-2 rounded-full shadow-lg hover:scale-110 transition-transform"
-                     >
-                       <DownloadCloud size={20} />
-                     </button>
-                  )}
-                </div>
               </div>
-            ))}
+            )})}
+            
+            {/* Loading Indicator at end of list */}
+            {loading && (
+                <div className="col-span-full py-8 flex justify-center items-center gap-3 text-slate-500 animate-pulse">
+                    <RefreshCw size={18} className="animate-spin" />
+                    <span className="text-sm font-medium">Scanning for more files...</span>
+                </div>
+            )}
           </div>
         )}
       </div>
+      
+      {/* Floating Scan Progress Bar (Fixed Bottom Center) */}
+      {scanStatus.active && (
+         <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700 text-slate-200 px-6 py-3 rounded-full shadow-2xl z-30 flex items-center gap-4 animate-fade-in">
+             <div className="flex items-center gap-2">
+                 <Loader2 size={16} className="text-blue-400 animate-spin" />
+                 <span className="text-sm font-semibold">Scanning History</span>
+             </div>
+             <div className="h-4 w-px bg-slate-700"></div>
+             <div className="text-xs space-x-3">
+                 <span><span className="text-blue-400 font-bold">{scanStatus.scanned}</span> msgs analyzed</span>
+                 <span className="text-slate-600">•</span>
+                 <span><span className="text-emerald-400 font-bold">{scanStatus.found}</span> files found</span>
+             </div>
+         </div>
+      )}
     </div>
   );
 };

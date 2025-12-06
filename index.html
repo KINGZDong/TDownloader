@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TDownloader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            colors: {
+              slate: {
+                850: '#151e32',
+                900: '#0f172a',
+                950: '#020617',
+              }
+            }
+          }
+        }
+      }
+    </script>
   <script type="importmap">
 {
   "imports": {
@@ -12,6 +34,7 @@
     "react/": "https://aistudiocdn.com/react@^19.2.1/",
     "socket.io-client": "https://aistudiocdn.com/socket.io-client@^4.8.1",
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "module": "https://aistudiocdn.com/module@^2.0.0",
     "tdl-tdlib-addon": "https://aistudiocdn.com/tdl-tdlib-addon@^1.2.2",
     "socket.io": "https://aistudiocdn.com/socket.io@^4.8.1",
     "http": "https://aistudiocdn.com/http@^0.0.1-security",
@@ -21,12 +44,12 @@
     "url": "https://aistudiocdn.com/url@^0.11.4",
     "vite": "https://aistudiocdn.com/vite@^7.2.6",
     "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1",
-    "module": "https://aistudiocdn.com/module@^2.0.0"
+    "child_process": "https://aistudiocdn.com/child_process@^1.0.2"
   }
 }
 </script>
 </head>
-  <body>
+  <body class="bg-slate-950 text-slate-200">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>

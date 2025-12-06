@@ -90,7 +90,7 @@ const App: React.FC = () => {
         <SettingsModal 
           isOpen={isSettingsOpen} 
           onClose={() => setIsSettingsOpen(false)} 
-          onSave={(config) => api.setProxy(config)} 
+          mode="proxy"
         />
       </>
     );
