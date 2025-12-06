@@ -8,7 +8,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import process from 'node:process';
 import { exec } from 'child_process';
-import 'dotenv/config'; // Load .env file
+import 'dotenv/config'; 
 
 // Shim for __dirname in ESM environment
 const __filename = fileURLToPath(import.meta.url);
@@ -20,17 +20,11 @@ const { Client } = require('tdl');
 // --- 0. 防止进程崩溃的关键代码 ---
 process.on('unhandledRejection', (reason: any, promise) => {
   if (reason) {
-      // 忽略 "Request aborted" 错误 (Code 500)
       if (reason.message === 'Request aborted' || reason.code === 500) return;
-      
-      // 忽略 "Call to requestQrCodeAuthentication unexpected" 错误 (Code 400)
-      // 这通常发生在前端重复请求二维码或状态不匹配时
       if (reason.code === 400 && reason.message?.includes('requestQrCodeAuthentication')) return;
   }
-  
   console.error('⚠️ 警告: 捕获到未处理的 Promise 拒绝 (通常是 TDLib 网络错误)');
   console.error('原因:', reason);
-  // 不要退出进程，保持服务器运行以便接收代理配置
 });
 
 process.on('uncaughtException', (error) => {
@@ -42,6 +36,7 @@ process.on('uncaughtException', (error) => {
 const API_ID = Number(process.env.API_ID);
 const API_HASH = process.env.API_HASH;
 
+// 检查环境变量
 if (!API_ID || !API_HASH) {
   console.error('\n==================================================');
   console.error('❌ 错误: 未在 .env 文件中找到 API_ID 或 API_HASH');
@@ -60,25 +55,20 @@ else if (platform === 'darwin') libName = 'libtdjson.dylib';
 else libName = 'libtdjson.so';
 
 const libPath = path.resolve(__dirname, libName);
+
 if (!fs.existsSync(libPath)) {
   console.error(`❌ Error: TDLib library not found: ${libName}`);
+  console.error(`Please place ${libName} in the backend directory.`);
   process.exit(1);
 }
 
-// --- 初始化 Server ---
+// --- 初始化 Server (Socket.io Only) ---
 const httpServer = createServer();
 const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 // --- 数据目录结构 ---
-// .tdownloader-data/
-//    sessions.json  (Stores metadata about accounts)
-//    sessions/
-//       default/    (Default DB)
-//       user_123/   (Other DBs)
-//    files/         (Global shared cache for files, or per session if preferred. Sharing saves space)
-
 const HOME_DIR = os.homedir();
 const APP_DATA_DIR = path.join(HOME_DIR, '.tdownloader-data');
 const SESSIONS_DIR = path.join(APP_DATA_DIR, 'sessions');
@@ -139,7 +129,6 @@ const updateCurrentSessionMetadata = async () => {
         if (me.profile_photo?.small?.local?.path && fs.existsSync(me.profile_photo.small.local.path)) {
             avatarBase64 = fs.readFileSync(me.profile_photo.small.local.path).toString('base64');
         } else if (me.profile_photo?.small?.id) {
-            // Trigger download if not available, update later? simplified for now.
             try {
                 await client.invoke({ _: 'downloadFile', file_id: me.profile_photo.small.id, priority: 1 });
             } catch {}
@@ -168,16 +157,36 @@ const updateCurrentSessionMetadata = async () => {
     }
 };
 
+// --- PROXY HELPER (Backend Execution Only) ---
+async function applyProxy(config: any) {
+    if (!client) return;
+    try {
+        // First disable existing
+        await client.invoke({ _: 'disableProxy' }).catch(() => {});
+        
+        if (!config.enabled && !config.host) return;
+
+        let typeClass: any;
+        if (config.type === 'socks5') {
+            typeClass = { _: 'proxyTypeSocks5', username: config.username || '', password: config.password || '' };
+        } else if (config.type === 'http') {
+            typeClass = { _: 'proxyTypeHttp', username: config.username || '', password: config.password || '', http_only: false };
+        } else if (config.type === 'mtproto') {
+            typeClass = { _: 'proxyTypeMtproto', secret: config.secret || '' };
+        }
+        
+        console.log(`🛡️ Applying Proxy: ${config.type}://${config.host}:${config.port}`);
+        await client.invoke({ _: 'addProxy', server: config.host, port: config.port, enable: true, type: typeClass });
+    } catch (e) {
+        console.error('❌ Failed to apply proxy:', e);
+    }
+}
+
 // --- CLIENT INITIALIZATION ---
 async function initializeClient(sessionId: string) {
-    // 1. Close existing
     if (client) {
         console.log('🔄 Closing previous client...');
-        try {
-            await client.close(); // Graceful close
-        } catch (e) { 
-            // Ignore close errors
-        }
+        try { await client.close(); } catch (e) { }
         client = null;
         activeDownloads.clear();
     }
@@ -186,27 +195,21 @@ async function initializeClient(sessionId: string) {
     const dbDir = path.join(SESSIONS_DIR, sessionId);
 
     console.log(`🚀 Initializing Client for Session: ${sessionId}`);
-    
-    // 2. Create new client
+
     client = new Client(new TDLib(libPath), {
         apiId: API_ID,
         apiHash: API_HASH,
         databaseDirectory: dbDir,
-        filesDirectory: FILES_DIR, // Share files dir to save space
+        filesDirectory: FILES_DIR, 
     });
     
-    // Silence internal C++ logs (State 1 messages)
     try {
         await client.invoke({ _: 'setLogVerbosityLevel', new_verbosity_level: 1 });
-    } catch {}
+    } catch (e) { console.error('Client setup error', e); }
 
-    // 3. Setup Listeners
-    client.on('error', (err: any) => {
-        console.error('TDLib Client Error:', err);
-    });
+    client.on('error', (err: any) => console.error('TDLib Client Error:', err));
 
     client.on('update', (update: any) => {
-        // Auth State
         if (update._ === 'updateAuthorizationState') {
             const state = update.authorization_state;
             let frontendState = 'LOGGED_OUT';
@@ -222,15 +225,13 @@ async function initializeClient(sessionId: string) {
                 case 'authorizationStateWaitPassword': frontendState = 'AWAITING_PASSWORD'; break;
                 case 'authorizationStateReady': 
                     frontendState = 'READY'; 
-                    updateCurrentSessionMetadata(); // Save user info when logged in
+                    updateCurrentSessionMetadata(); 
                     break;
             }
             io.emit('auth_update', { state: frontendState, qrLink });
         }
 
-        // Connection State
         if (update._ === 'updateConnectionState') {
-             // ... (Keep existing mapping logic)
              const state = update.state;
              let simpleState = 'unknown';
              switch (state._) {
@@ -243,31 +244,25 @@ async function initializeClient(sessionId: string) {
              io.emit('connection_state_update', { state: simpleState });
         }
         
-        // File Updates (Only for download progress, not for thumbnails generally)
         if (update._ === 'updateFile') {
             handleFileUpdate(update.file);
         }
     });
 
-    // 4. Connect (Safe Wrap)
     try {
         await client.connect();
     } catch (e) {
-        console.error("❌ TDLib connect error (Likely network issue, waiting for proxy...):", e);
+        console.error("❌ TDLib connect error:", e);
     }
 }
 
 // --- File Handling Helper ---
 function handleFileUpdate(file: any) {
-    if (!file || !file.local) return; // Basic safety
+    if (!file || !file.local) return; 
 
-    // 1. Handle Active Main Downloads
     let downloadInfo = activeDownloads.get(file.id);
 
-    // FIX: Only process progress if this file is in our active user-initiated downloads list.
-    // We REMOVED the "|| file.local.is_downloading_active" check that was auto-adding unknown files.
     if (downloadInfo) {
-       
        if (!file.local.is_downloading_active && !file.local.is_downloading_completed) {
            if (downloadInfo.status !== 'cancelled' && downloadInfo.status !== 'paused') {
               downloadInfo.status = 'paused';
@@ -324,16 +319,10 @@ function handleFileUpdate(file: any) {
        }
     }
 
-    // 2. Handle Thumbnail Downloads
-    // If a file finishes downloading and it is NOT in activeDownloads, it might be a thumbnail request
-    // This logic is safe because it only emits 'thumbnail_ready', not 'download_progress'
     if (file.local.is_downloading_completed && !downloadInfo) {
-        // Read file and check if we should emit it
-        // We check if file size is small (thumbnails are small)
-        if (file.size < 20 * 1024 * 1024) { // Increased limit slightly to 20MB just in case, but usually small
+        if (file.size < 20 * 1024 * 1024) { 
             try {
                 if (fs.existsSync(file.local.path)) {
-                    // We only emit this. The frontend decides if it requested this fileId for a thumbnail.
                     const data = fs.readFileSync(file.local.path).toString('base64');
                     io.emit('thumbnail_ready', { fileId: file.id, data: data });
                 }
@@ -343,7 +332,8 @@ function handleFileUpdate(file: any) {
 }
 
 // --- Helper Functions (Mappings) ---
-function mapChat(chat: any): any {
+// Exported for testing
+export function mapChat(chat: any): any {
   let type = 'private';
   if (chat.type._ === 'chatTypeSupergroup' || chat.type._ === 'chatTypeBasicGroup') {
     type = chat.type.is_channel ? 'channel' : 'group';
@@ -358,7 +348,7 @@ function mapChat(chat: any): any {
   };
 }
 
-function mapMessageToFile(message: any): any | null {
+export function mapMessageToFile(message: any): any | null {
   try {
       if (!message || !message.content) return null;
       const content = message.content;
@@ -369,87 +359,45 @@ function mapMessageToFile(message: any): any | null {
       let thumbnailFileId: number | undefined = undefined;
       let text = '';
 
-      // Safe caption extraction
       if (content.caption && content.caption.text) {
           text = content.caption.text;
       }
 
-      // --- 1. HANDLE PHOTO ---
       if (content._ === 'messagePhoto') {
-          // messagePhoto has 'photo' content
-          // photo has 'sizes' (array of photoSize)
           const sizes = content.photo?.sizes;
           if (Array.isArray(sizes) && sizes.length > 0) {
-              // Largest is usually last
               const largest = sizes[sizes.length - 1];
-              fileData = largest?.photo; // photoSize has .photo (file)
+              fileData = largest?.photo; 
               fileType = 'Image';
-
-              // Mini thumbnail
-              if (content.photo.minithumbnail?.data) {
-                  thumbnail = content.photo.minithumbnail.data;
-              }
-
-              // HQ Thumbnail: Find 'x' (800px) or 'm' (320px) or 's' (small)
-              // photoSize has .type
-              const preview = sizes.find((s: any) => s.type === 'x') || 
-                              sizes.find((s: any) => s.type === 'm') || 
-                              sizes.find((s: any) => s.type === 's');
-              
-              if (preview && preview.photo && preview.photo.id) {
-                  thumbnailFileId = preview.photo.id;
-              }
+              if (content.photo.minithumbnail?.data) thumbnail = content.photo.minithumbnail.data;
+              const preview = sizes.find((s: any) => s.type === 'x') || sizes.find((s: any) => s.type === 'm') || sizes.find((s: any) => s.type === 's');
+              if (preview && preview.photo && preview.photo.id) thumbnailFileId = preview.photo.id;
           }
       }
-      
-      // --- 2. HANDLE VIDEO ---
       else if (content._ === 'messageVideo') {
-          fileData = content.video?.video; // video content has .video (file)
+          fileData = content.video?.video; 
           fileType = 'Video';
-
-          if (content.video?.minithumbnail?.data) {
-              thumbnail = content.video.minithumbnail.data;
-          }
-
-          // Thumbnail logic: Support both legacy (PhotoSize) and new (Thumbnail) schemas
+          if (content.video?.minithumbnail?.data) thumbnail = content.video.minithumbnail.data;
           const thumbObj = content.video?.thumbnail;
           if (thumbObj) {
-              // New schema: thumbnail object has .file
-              if (thumbObj.file && thumbObj.file.id) {
-                  thumbnailFileId = thumbObj.file.id;
-              } 
-              // Old schema: thumbnail object (actually PhotoSize) has .photo
-              else if (thumbObj.photo && thumbObj.photo.id) {
-                  thumbnailFileId = thumbObj.photo.id;
-              }
+              if (thumbObj.file && thumbObj.file.id) thumbnailFileId = thumbObj.file.id;
+              else if (thumbObj.photo && thumbObj.photo.id) thumbnailFileId = thumbObj.photo.id;
           }
       }
-
-      // --- 3. HANDLE DOCUMENT ---
       else if (content._ === 'messageDocument') {
           fileData = content.document?.document;
           fileType = 'Document';
-
-          if (content.document?.minithumbnail?.data) {
-              thumbnail = content.document.minithumbnail.data;
-          }
-
+          if (content.document?.minithumbnail?.data) thumbnail = content.document.minithumbnail.data;
           const thumbObj = content.document?.thumbnail;
           if (thumbObj) {
               if (thumbObj.file && thumbObj.file.id) thumbnailFileId = thumbObj.file.id;
               else if (thumbObj.photo && thumbObj.photo.id) thumbnailFileId = thumbObj.photo.id;
           }
       }
-
-      // --- 4. HANDLE AUDIO ---
       else if (content._ === 'messageAudio') {
           fileData = content.audio?.audio;
           fileType = 'Music';
-
-          if (content.audio?.minithumbnail?.data) {
-              thumbnail = content.audio.minithumbnail.data;
-          }
-          
+          if (content.audio?.minithumbnail?.data) thumbnail = content.audio.minithumbnail.data;
           const thumbObj = content.audio?.album_cover_thumbnail;
           if (thumbObj) {
               if (thumbObj.file && thumbObj.file.id) thumbnailFileId = thumbObj.file.id;
@@ -457,12 +405,8 @@ function mapMessageToFile(message: any): any | null {
           }
       }
 
-      // --- VALIDATE FILE DATA ---
-      if (!fileData || !fileData.id) {
-          return null; 
-      }
+      if (!fileData || !fileData.id) return null; 
 
-      // Safe Path Check
       let localPath = '';
       let isDownloaded = false;
       let isDownloading = false;
@@ -471,12 +415,7 @@ function mapMessageToFile(message: any): any | null {
           localPath = fileData.local.path || '';
           isDownloading = !!fileData.local.is_downloading_active;
           if (fileData.local.is_downloading_completed && localPath) {
-               // Only check fs if path is not empty string
-               try {
-                   isDownloaded = fs.existsSync(localPath);
-               } catch {
-                   isDownloaded = false;
-               }
+               try { isDownloaded = fs.existsSync(localPath); } catch { isDownloaded = false; }
           }
       }
 
@@ -518,7 +457,6 @@ function openFolder(targetPath: string) {
 // --- SOCKET HANDLERS ---
 
 io.on('connection', (socket) => {
-    // Basic Handlers
     socket.emit('sessions_list_update', loadSessionsMetadata());
     if (client) { }
 
@@ -526,7 +464,6 @@ io.on('connection', (socket) => {
         socket.emit('sessions_list_update', loadSessionsMetadata());
     });
 
-    // Account Switching / Management
     socket.on('create_new_session', async () => {
         const newId = `session_${Date.now()}`;
         await initializeClient(newId);
@@ -560,7 +497,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Auth
     socket.on('get_auth_state', async () => {
         if (!client) {
              socket.emit('auth_update', { state: 'LOGGED_OUT' }); 
@@ -574,7 +510,6 @@ io.on('connection', (socket) => {
         try {
             await client.invoke({ _: 'requestQrCodeAuthentication', other_user_ids: [] });
         } catch (e: any) {
-            // Ignore if already requesting or state mismatch to prevent spamming server logs
             if (e?.code === 400) return;
             console.error('QR Request Error:', e);
         }
@@ -584,11 +519,9 @@ io.on('connection', (socket) => {
     socket.on('login_code', async (c) => client?.invoke({ _: 'checkAuthenticationCode', code: c }));
     socket.on('login_password', async (p) => client?.invoke({ _: 'checkAuthenticationPassword', password: p }));
 
-    // Core Logic
     socket.on('get_chats', async () => {
         if (!client) return;
         try {
-            // Verify Client is Ready to avoid "Not Found" errors during switching
             const authState = await client.invoke({ _: 'getAuthorizationState' });
             if (authState._ !== 'authorizationStateReady') return;
 
@@ -598,7 +531,6 @@ io.on('connection', (socket) => {
             const chatsRaw = await Promise.all(chatsPromises);
             socket.emit('chats_update', chatsRaw.map(mapChat));
         } catch (e: any) { 
-            // Better error handling for 404/Not Found
             if (e?.code === 404 || e?.message === 'Not Found') return;
             console.error('Failed to load chats:', e?.message || e);
         }
@@ -648,7 +580,6 @@ io.on('connection', (socket) => {
                       if (endDate && msg.date > endDate + 86400) return false;
                       return true;
                  });
-                 // CRITICAL FIX: mapMessageToFile is now robust. We filter out nulls (failed mappings)
                  const filesBatch = validMessages.map(mapMessageToFile).filter((f: any) => f !== null);
                  
                  if (filesBatch.length > 0) {
@@ -677,11 +608,8 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Thumbnail Request Handler
     socket.on('request_thumbnail', async (fileId) => {
         if (!client || !fileId) return;
-        
-        // Check if file is already downloaded (optimization)
         try {
             const fileInfo = await client.invoke({ _: 'getFile', file_id: fileId });
             if (fileInfo.local.is_downloading_completed && fs.existsSync(fileInfo.local.path)) {
@@ -689,12 +617,10 @@ io.on('connection', (socket) => {
                  socket.emit('thumbnail_ready', { fileId: fileId, data: data });
                  return;
             }
-            
-            // If not, trigger download with priority 1 (High Priority for Thumbnails)
             await client.invoke({ 
                 _: 'downloadFile', 
                 file_id: fileId, 
-                priority: 1, // 1=top. Ensure it jumps the queue.
+                priority: 1, 
                 offset: 0, 
                 limit: 0, 
                 synchronous: false 
@@ -702,7 +628,6 @@ io.on('connection', (socket) => {
         } catch (e) { console.error('Error fetching thumbnail:', e); }
     });
 
-    // Download handlers
     socket.on('download_file', async (p) => { 
         if(client) {
             activeDownloads.set(p.fileId, { fileName: p.fileName, totalSize: p.totalSize, startTime: Date.now(), lastDownloadedSize: 0, lastUpdateTime: Date.now(), speed: 0, status: 'pending' });
@@ -718,30 +643,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Config & System
     socket.on('get_config', () => socket.emit('config_update', appConfig));
     socket.on('update_config', (c) => { if (c.downloadPath) appConfig.downloadPath = c.downloadPath; socket.emit('config_update', appConfig); });
     socket.on('open_file_folder', ({path}) => openFolder(path));
-    socket.on('select_directory', () => { /* ... exec logic ... */ }); 
+    socket.on('select_directory', () => {  }); 
     
-    // Proxy
+    // UI Override (Manual set from settings)
     socket.on('set_proxy', async (config) => {
-        if (!client) return; 
-        try { await client.invoke({ _: 'disableProxy' }); console.log('Old proxy disabled'); } catch(e) { console.error('Error disabling proxy', e); }
-        if (!config.enabled) return;
-        let typeClass: any;
-        if (config.type === 'socks5') {
-            typeClass = { _: 'proxyTypeSocks5', username: config.username || '', password: config.password || '' };
-        } else if (config.type === 'http') {
-            typeClass = { _: 'proxyTypeHttp', username: config.username || '', password: config.password || '', http_only: false };
-        } else if (config.type === 'mtproto') {
-            typeClass = { _: 'proxyTypeMtproto', secret: config.secret || '' };
-        }
-        try {
-            console.log(`Setting proxy: ${config.type}://${config.host}:${config.port}`);
-            await client.invoke({ _: 'addProxy', server: config.host, port: config.port, enable: true, type: typeClass });
-            console.log('✅ Proxy applied successfully!');
-        } catch (e) { console.error('❌ Failed to set proxy:', e); }
+        await applyProxy(config);
     });
 });
 
@@ -753,6 +662,7 @@ if (sessions.length > 0) {
     initializeClient('default_session');
 }
 
-httpServer.listen(3001, () => {
-  console.log('✅ Backend server running on http://localhost:3001');
+// Ensure the server listens on all interfaces (0.0.0.0) for Docker
+httpServer.listen(3001, '0.0.0.0', () => {
+  console.log('✅ Backend server running on http://0.0.0.0:3001');
 });

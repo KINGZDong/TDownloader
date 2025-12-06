@@ -6,10 +6,13 @@ class ApiService {
   private listeners: Record<string, Function[]> = {};
 
   constructor() {
-    // Connect to the backend server
-    this.socket = io('http://localhost:3001', {
+    // Reverted to hardcoded local URL for local development
+    const connectionUrl = 'http://localhost:3001';
+
+    this.socket = io(connectionUrl, {
       transports: ['websocket'],
       autoConnect: true,
+      path: '/socket.io'
     });
 
     this.setupSocketListeners();
