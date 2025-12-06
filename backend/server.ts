@@ -243,6 +243,8 @@ async function initializeClient(sessionId: string) {
 
 // --- File Handling Helper ---
 function handleFileUpdate(file: any) {
+    if (!file || !file.local) return; // Basic safety
+
     // 1. Handle Active Main Downloads
     let downloadInfo = activeDownloads.get(file.id);
 
@@ -350,75 +352,148 @@ function mapChat(chat: any): any {
 }
 
 function mapMessageToFile(message: any): any | null {
-  if (!message.content) return null;
-  const content = message.content;
-  let fileData = null;
-  let fileType = 'Document';
-  let thumbnail = null;
-  let thumbnailFileId = undefined; // ID of the 'm' or 's' size photo
-  let text = '';
+  try {
+      if (!message || !message.content) return null;
+      const content = message.content;
+      
+      let fileData: any = null;
+      let fileType: any = 'Document';
+      let thumbnail: string | null = null; // Base64
+      let thumbnailFileId: number | undefined = undefined;
+      let text = '';
 
-  if (content.caption && content.caption.text) text = content.caption.text;
+      // Safe caption extraction
+      if (content.caption && content.caption.text) {
+          text = content.caption.text;
+      }
 
-  if (content._ === 'messagePhoto') {
-    // 1. The main file to download is the largest one (last in sizes)
-    const photoSizes = content.photo.sizes;
-    const photo = photoSizes[photoSizes.length - 1];
-    fileData = photo.photo;
-    fileType = 'Image';
-    
-    // 2. The minithumbnail (blurry)
-    if (content.photo.minithumbnail) thumbnail = content.photo.minithumbnail.data;
-    
-    // 3. The large thumbnail for preview download (Prioritize 'x' > 'm' > 's')
-    // 'y' is too big (full size), 'x' is typically 800px which is perfect for sharp thumbnails
-    const previewSize = photoSizes.find((s: any) => s.type === 'x') || 
-                        photoSizes.find((s: any) => s.type === 'm') || 
-                        photoSizes.find((s: any) => s.type === 's');
-    
-    if (previewSize) {
-        thumbnailFileId = previewSize.photo.id;
-    }
+      // --- 1. HANDLE PHOTO ---
+      if (content._ === 'messagePhoto') {
+          // messagePhoto has 'photo' content
+          // photo has 'sizes' (array of photoSize)
+          const sizes = content.photo?.sizes;
+          if (Array.isArray(sizes) && sizes.length > 0) {
+              // Largest is usually last
+              const largest = sizes[sizes.length - 1];
+              fileData = largest?.photo; // photoSize has .photo (file)
+              fileType = 'Image';
 
-  } else if (content._ === 'messageVideo') {
-    fileData = content.video.video;
-    fileType = 'Video';
-    if (content.video.minithumbnail) thumbnail = content.video.minithumbnail.data;
-    if (content.video.thumbnail) thumbnailFileId = content.video.thumbnail.photo.id;
+              // Mini thumbnail
+              if (content.photo.minithumbnail?.data) {
+                  thumbnail = content.photo.minithumbnail.data;
+              }
 
-  } else if (content._ === 'messageDocument') {
-    fileData = content.document.document;
-    fileType = 'Document';
-    if (content.document.minithumbnail) thumbnail = content.document.minithumbnail.data;
-    if (content.document.thumbnail) thumbnailFileId = content.document.thumbnail.photo.id;
+              // HQ Thumbnail: Find 'x' (800px) or 'm' (320px) or 's' (small)
+              // photoSize has .type
+              const preview = sizes.find((s: any) => s.type === 'x') || 
+                              sizes.find((s: any) => s.type === 'm') || 
+                              sizes.find((s: any) => s.type === 's');
+              
+              if (preview && preview.photo && preview.photo.id) {
+                  thumbnailFileId = preview.photo.id;
+              }
+          }
+      }
+      
+      // --- 2. HANDLE VIDEO ---
+      else if (content._ === 'messageVideo') {
+          fileData = content.video?.video; // video content has .video (file)
+          fileType = 'Video';
 
-  } else if (content._ === 'messageAudio') {
-    fileData = content.audio.audio;
-    fileType = 'Music';
-    // Audio usually has album art in 'album_cover_thumbnail'
-    if (content.audio.album_cover_thumbnail) thumbnailFileId = content.audio.album_cover_thumbnail.photo.id;
-    if (content.audio.minithumbnail) thumbnail = content.audio.minithumbnail.data; // rare for audio
+          if (content.video?.minithumbnail?.data) {
+              thumbnail = content.video.minithumbnail.data;
+          }
+
+          // Thumbnail logic: Support both legacy (PhotoSize) and new (Thumbnail) schemas
+          const thumbObj = content.video?.thumbnail;
+          if (thumbObj) {
+              // New schema: thumbnail object has .file
+              if (thumbObj.file && thumbObj.file.id) {
+                  thumbnailFileId = thumbObj.file.id;
+              } 
+              // Old schema: thumbnail object (actually PhotoSize) has .photo
+              else if (thumbObj.photo && thumbObj.photo.id) {
+                  thumbnailFileId = thumbObj.photo.id;
+              }
+          }
+      }
+
+      // --- 3. HANDLE DOCUMENT ---
+      else if (content._ === 'messageDocument') {
+          fileData = content.document?.document;
+          fileType = 'Document';
+
+          if (content.document?.minithumbnail?.data) {
+              thumbnail = content.document.minithumbnail.data;
+          }
+
+          const thumbObj = content.document?.thumbnail;
+          if (thumbObj) {
+              if (thumbObj.file && thumbObj.file.id) thumbnailFileId = thumbObj.file.id;
+              else if (thumbObj.photo && thumbObj.photo.id) thumbnailFileId = thumbObj.photo.id;
+          }
+      }
+
+      // --- 4. HANDLE AUDIO ---
+      else if (content._ === 'messageAudio') {
+          fileData = content.audio?.audio;
+          fileType = 'Music';
+
+          if (content.audio?.minithumbnail?.data) {
+              thumbnail = content.audio.minithumbnail.data;
+          }
+          
+          const thumbObj = content.audio?.album_cover_thumbnail;
+          if (thumbObj) {
+              if (thumbObj.file && thumbObj.file.id) thumbnailFileId = thumbObj.file.id;
+              else if (thumbObj.photo && thumbObj.photo.id) thumbnailFileId = thumbObj.photo.id;
+          }
+      }
+
+      // --- VALIDATE FILE DATA ---
+      if (!fileData || !fileData.id) {
+          return null; 
+      }
+
+      // Safe Path Check
+      let localPath = '';
+      let isDownloaded = false;
+      let isDownloading = false;
+
+      if (fileData.local) {
+          localPath = fileData.local.path || '';
+          isDownloading = !!fileData.local.is_downloading_active;
+          if (fileData.local.is_downloading_completed && localPath) {
+               // Only check fs if path is not empty string
+               try {
+                   isDownloaded = fs.existsSync(localPath);
+               } catch {
+                   isDownloaded = false;
+               }
+          }
+      }
+
+      return {
+        id: fileData.id,
+        messageId: message.id,
+        groupId: message.media_album_id || '0', 
+        uniqueId: fileData.remote?.unique_id || '',
+        name: content.document?.file_name || content.video?.file_name || content.audio?.file_name || `file_${fileData.id}.${fileType === 'Image' ? 'jpg' : 'dat'}`,
+        text: text, 
+        size: fileData.expected_size || 0,
+        date: message.date || 0,
+        type: fileType,
+        thumbnail: thumbnail, 
+        thumbnailFileId: thumbnailFileId, 
+        path: localPath, 
+        isDownloading: isDownloading,
+        isDownloaded: isDownloaded
+      };
+
+  } catch (e) {
+      console.error(`Error mapping message ${message?.id}:`, e);
+      return null;
   }
-
-  if (!fileData) return null;
-  const isDownloaded = fileData.local.is_downloading_completed && fs.existsSync(fileData.local.path);
-
-  return {
-    id: fileData.id,
-    messageId: message.id,
-    groupId: message.media_album_id || '0', 
-    uniqueId: fileData.remote.unique_id,
-    name: content.document?.file_name || content.video?.file_name || content.audio?.file_name || `file_${fileData.id}.${fileType === 'Image' ? 'jpg' : 'dat'}`,
-    text: text, 
-    size: fileData.expected_size,
-    date: message.date,
-    type: fileType,
-    thumbnail: thumbnail, // Base64 blurry
-    thumbnailFileId: thumbnailFileId, // ID for high-res preview
-    path: fileData.local.path, 
-    isDownloading: fileData.local.is_downloading_active,
-    isDownloaded: isDownloaded
-  };
 }
 
 function openFolder(targetPath: string) {
@@ -547,6 +622,7 @@ io.on('connection', (socket) => {
                       if (endDate && msg.date > endDate + 86400) return false;
                       return true;
                  });
+                 // CRITICAL FIX: mapMessageToFile is now robust. We filter out nulls (failed mappings)
                  const filesBatch = validMessages.map(mapMessageToFile).filter((f: any) => f !== null);
                  
                  if (filesBatch.length > 0) {
