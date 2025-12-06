@@ -263,7 +263,9 @@ function handleFileUpdate(file: any) {
     let downloadInfo = activeDownloads.get(file.id);
 
     if (downloadInfo) {
+       // Update logic for status
        if (!file.local.is_downloading_active && !file.local.is_downloading_completed) {
+           // If TDLib says not active, and we haven't explicitly cancelled, mark as paused
            if (downloadInfo.status !== 'cancelled' && downloadInfo.status !== 'paused') {
               downloadInfo.status = 'paused';
               downloadInfo.speed = 0;
@@ -302,11 +304,14 @@ function handleFileUpdate(file: any) {
          try {
             if (!fs.existsSync(appConfig.downloadPath)) fs.mkdirSync(appConfig.downloadPath, { recursive: true });
             let targetPath = finalPath;
+            
+            // Basic collision handling
             if (fs.existsSync(targetPath)) {
               const ext = path.extname(downloadInfo.fileName);
               const name = path.basename(downloadInfo.fileName, ext);
               targetPath = path.join(appConfig.downloadPath, `${name}_${Date.now()}${ext}`);
             }
+            
             if (file.local.path !== targetPath) {
                 fs.copyFileSync(file.local.path, targetPath);
             }
@@ -358,6 +363,10 @@ export function mapMessageToFile(message: any): any | null {
       let thumbnail: string | null = null; // Base64
       let thumbnailFileId: number | undefined = undefined;
       let text = '';
+      
+      // Generate a date string for filename fallback: YYYYMMDD_HHMMSS
+      const dateDate = new Date(message.date * 1000);
+      const dateStr = dateDate.toISOString().replace(/[:T-]/g, '').split('.')[0]; 
 
       if (content.caption && content.caption.text) {
           text = content.caption.text;
@@ -407,6 +416,24 @@ export function mapMessageToFile(message: any): any | null {
 
       if (!fileData || !fileData.id) return null; 
 
+      // --- IMPROVED NAME GENERATION LOGIC ---
+      let fileName = content.document?.file_name || content.video?.file_name || content.audio?.file_name;
+      
+      if (!fileName) {
+          if (fileType === 'Image') {
+              fileName = `Photo_${dateStr}.jpg`;
+          } else if (fileType === 'Video') {
+              fileName = `Video_${dateStr}.mp4`;
+          } else if (fileType === 'Music') {
+              fileName = `Audio_${dateStr}.mp3`;
+          } else {
+              fileName = `File_${dateStr}.dat`;
+          }
+          // Append partial ID to avoid collision in same second
+          fileName = fileName.replace('.', `_${fileData.id}.`); 
+      }
+      // ---------------------------------------
+
       let localPath = '';
       let isDownloaded = false;
       let isDownloading = false;
@@ -424,7 +451,7 @@ export function mapMessageToFile(message: any): any | null {
         messageId: message.id,
         groupId: message.media_album_id || '0', 
         uniqueId: fileData.remote?.unique_id || '',
-        name: content.document?.file_name || content.video?.file_name || content.audio?.file_name || `file_${fileData.id}.${fileType === 'Image' ? 'jpg' : 'dat'}`,
+        name: fileName,
         text: text, 
         size: fileData.expected_size || 0,
         date: message.date || 0,
@@ -748,13 +775,103 @@ io.on('connection', (socket) => {
             .catch((e: any) => console.error('Download start error:', e?.message || e));
         }
     });
+
+    // --- NEW / FIXED SOCKET HANDLERS ---
+    
+    // 1. Pause (Cancel download in TDLib terms)
+    socket.on('pause_download', async (fileId) => {
+        if (client) {
+            try { 
+                await client.invoke({ _: 'cancelDownloadFile', file_id: fileId, only_if_pending: false }); 
+                // Manually update status in our map for immediate UI feedback
+                const task = activeDownloads.get(fileId);
+                if (task) {
+                    task.status = 'paused';
+                    task.speed = 0;
+                    activeDownloads.set(fileId, task);
+                }
+            } catch (e) { console.error('Pause error', e); }
+        }
+    });
+
+    // 2. Resume (Download again)
+    socket.on('resume_download', async (fileId) => {
+        if (client) {
+            try { 
+                await client.invoke({ _: 'downloadFile', file_id: fileId, priority: 1, offset: 0, limit: 0, synchronous: false });
+                const task = activeDownloads.get(fileId);
+                if (task) {
+                    task.status = 'downloading';
+                    activeDownloads.set(fileId, task);
+                }
+            } catch (e) { console.error('Resume error', e); }
+        }
+    });
+
+    // 3. Cancel (Cancel + Delete File)
     socket.on('cancel_download', async (fileId) => {
         if(client) {
              try { await client.invoke({ _: 'cancelDownloadFile', file_id: fileId, only_if_pending: false }); } catch {}
              try { await client.invoke({ _: 'deleteFile', file_id: fileId }); } catch {}
              activeDownloads.delete(fileId);
+             // Notify frontend immediately to remove the item
+             io.emit('download_progress', { id: fileId, status: 'cancelled' } as any);
         }
     });
+    
+    // 4. Pause All
+    socket.on('pause_all_downloads', async () => {
+        if (!client) return;
+        for (const [id, task] of activeDownloads.entries()) {
+            if (task.status === 'downloading' || task.status === 'pending') {
+                try {
+                    client.invoke({ _: 'cancelDownloadFile', file_id: id, only_if_pending: false });
+                    task.status = 'paused';
+                    task.speed = 0;
+                    activeDownloads.set(id, task);
+                } catch {}
+            }
+        }
+    });
+
+    // 5. Resume All
+    socket.on('resume_all_downloads', async () => {
+        if (!client) return;
+        for (const [id, task] of activeDownloads.entries()) {
+            if (task.status === 'paused') {
+                try {
+                    client.invoke({ _: 'downloadFile', file_id: id, priority: 1, offset: 0, limit: 0, synchronous: false });
+                    task.status = 'downloading';
+                    activeDownloads.set(id, task);
+                } catch {}
+            }
+        }
+    });
+
+    // 6. Cancel All
+    socket.on('cancel_all_downloads', async () => {
+        if (!client) return;
+        for (const [id, task] of activeDownloads.entries()) {
+            try {
+                await client.invoke({ _: 'cancelDownloadFile', file_id: id, only_if_pending: false });
+                await client.invoke({ _: 'deleteFile', file_id: id });
+            } catch {}
+            // Send explicit cancelled event for each
+             io.emit('download_progress', { id, status: 'cancelled' } as any);
+        }
+        activeDownloads.clear();
+    });
+    
+    socket.on('clear_completed_downloads', () => {
+        // This is mostly a frontend state thing, but if backend kept history we'd clear it here.
+        // For now, we iterate map and remove completed ones.
+        for (const [id, task] of activeDownloads.entries()) {
+            if (task.status === 'completed') {
+                activeDownloads.delete(id);
+            }
+        }
+    });
+    // -----------------------------------
 
     socket.on('get_config', () => socket.emit('config_update', appConfig));
     socket.on('update_config', (c) => { if (c.downloadPath) appConfig.downloadPath = c.downloadPath; socket.emit('config_update', appConfig); });
