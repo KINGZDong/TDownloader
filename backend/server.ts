@@ -606,33 +606,43 @@ io.on('connection', (socket) => {
                         
                         // GROUP EXPANSION LOGIC
                         const groupIdsToFetch = new Set<string>();
-                        const plainMessages = [];
                         
+                        // 1. Identify all albums in this batch
                         for(const msg of rawMessages) {
                             if(msg.media_album_id && msg.media_album_id !== "0") {
                                 groupIdsToFetch.add(msg.media_album_id);
-                            } else {
-                                plainMessages.push(msg);
                             }
                         }
                         
+                        // 2. Fetch full groups (siblings) in parallel
+                        // IMPORTANT: We use a merge strategy. Even if this fails, we keep the original rawMessages.
                         const groupPromises = Array.from(groupIdsToFetch).map(gid => {
                             const representative = rawMessages.find((m: any) => m.media_album_id === gid);
+                            if (!representative) return Promise.resolve([]);
+
                             return client.invoke({ _: 'getMessageGroup', chat_id: chatId, message_id: representative.id })
                                 .then((res: any) => res.messages || [])
-                                .catch(() => []);
+                                .catch((e: any) => {
+                                    console.warn(`Failed to expand group ${gid}:`, e.message || e);
+                                    return [];
+                                });
                         });
                         
                         const groupResults = await Promise.all(groupPromises);
                         const allGroupMessages = groupResults.flat();
                         
-                        // Merge and Dedup by ID
-                        const allMsgs = [...plainMessages, ...allGroupMessages];
+                        // 3. Merge: Original Search Results + Expanded Group Files
                         const uniqueMap = new Map();
-                        allMsgs.forEach(m => uniqueMap.set(m.id, m));
+                        
+                        // First add ALL raw search results (ensures nothing is lost if group fetch fails)
+                        rawMessages.forEach((m: any) => uniqueMap.set(m.id, m));
+                        
+                        // Then add/overwrite with complete group info
+                        allGroupMessages.forEach((m: any) => uniqueMap.set(m.id, m));
+                        
                         messagesToProcess = Array.from(uniqueMap.values());
                         
-                        // Ensure descending sort for UI consistency (though UI sorts too)
+                        // Sort by date descending (UI also sorts, but good for consistency)
                         messagesToProcess.sort((a: any, b: any) => b.date - a.date);
                      } else {
                         messagesToProcess = [];
