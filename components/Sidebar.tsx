@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Chat } from '../types';
-import { Search, LogOut, User, Users, Megaphone, Hash } from 'lucide-react';
+import { Search, LogOut, User, Users, Megaphone, Hash, Settings } from 'lucide-react';
 import { api } from '../services/api';
 
 interface SidebarProps {
@@ -8,9 +8,10 @@ interface SidebarProps {
   activeChatId: number | null;
   onSelectChat: (id: number) => void;
   currentUser?: string;
+  onOpenSettings?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onSelectChat, currentUser }) => {
+const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onSelectChat, currentUser, onOpenSettings }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredChats = chats.filter(c => c.title.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -130,13 +131,22 @@ const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onSelectChat, cu
         ))}
       </div>
       
-      {/* Footer User Info */}
+      {/* Footer User Info & Settings */}
       <div className="p-4 bg-[#0B1120] text-xs text-slate-500 border-t border-slate-800 flex justify-between items-center">
         <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
             <span>Connected</span>
         </div>
-        <span className="opacity-50">v1.0.0</span>
+        
+        {onOpenSettings && (
+            <button 
+              onClick={onOpenSettings} 
+              className="flex items-center gap-1.5 hover:text-white transition-colors bg-slate-900/50 px-2 py-1 rounded hover:bg-slate-800"
+            >
+                <Settings size={12} />
+                <span>Settings</span>
+            </button>
+        )}
       </div>
     </div>
   );

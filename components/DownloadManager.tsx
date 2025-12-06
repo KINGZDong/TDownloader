@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DownloadTask } from '../types';
-import { ChevronUp, ChevronDown, X, Play, Pause, Trash2, FolderOpen, Download, Activity, Settings as SettingsIcon } from 'lucide-react';
+import { ChevronUp, ChevronDown, X, Play, Pause, Trash2, FolderOpen, Download, Activity, Settings as SettingsIcon, CircleOff } from 'lucide-react';
 import { api } from '../services/api';
 import SettingsModal from './SettingsModal';
 
@@ -12,7 +12,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Always show manager if there are active tasks, or if tasks list is not empty
+  // Always show manager if there are tasks, regardless of status (even if cancelled/error)
   if (tasks.length === 0) return null;
 
   const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'pending').length;
@@ -54,7 +54,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
                 <h3 className="font-bold text-sm leading-tight text-slate-100">Downloads</h3>
             </div>
             <p className="text-[10px] text-slate-400 font-medium">
-              {activeCount > 0 ? `${activeCount} in progress` : 'All tasks completed'}
+              {activeCount > 0 ? `${activeCount} in progress` : 'Idle'}
             </p>
           </div>
         </div>
@@ -70,13 +70,6 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
                 </div>
             )}
 
-            <button 
-              onClick={(e) => { e.stopPropagation(); setShowSettings(true); }}
-              className="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
-              title="Settings"
-            >
-               <SettingsIcon size={16} />
-            </button>
             <button className="p-1 rounded-full hover:bg-white/10 transition-colors">
                {isExpanded ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
             </button>
@@ -87,32 +80,54 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
       <div className={`flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]/50 p-4 space-y-3 transition-opacity duration-300 ${isExpanded ? 'opacity-100' : 'opacity-0'}`}>
         
         {/* Toolbar */}
-        {completedCount > 0 && (
-           <div className="flex justify-between items-center px-1 mb-2">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Queue</span>
+        <div className="flex justify-between items-center px-1 mb-2 gap-2">
+            <div className="flex gap-2">
+              {activeCount > 0 && (
+                <>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); api.pauseAllDownloads(); }}
+                    className="text-xs flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-1.5 rounded transition-colors font-medium"
+                    title="Pause All"
+                  >
+                    <Pause size={12} /> Pause All
+                  </button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); api.cancelAllDownloads(); }}
+                    className="text-xs flex items-center gap-1.5 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/30 px-2 py-1.5 rounded transition-colors font-medium"
+                    title="Cancel All"
+                  >
+                    <X size={12} /> Cancel All
+                  </button>
+                </>
+              )}
+            </div>
+            
+            {completedCount > 0 && (
               <button 
                 onClick={(e) => { e.stopPropagation(); api.clearCompleted(); }}
-                className="text-xs flex items-center gap-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 px-2 py-1 rounded transition-colors font-medium"
+                className="text-xs flex items-center gap-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 px-2 py-1 rounded transition-colors font-medium ml-auto"
               >
                 <Trash2 size={12} /> Clear Done
               </button>
-           </div>
-        )}
+            )}
+        </div>
 
         {tasks.map(task => (
-          <div key={task.id} className="bg-[#1e293b] p-4 rounded-xl shadow-sm border border-slate-700/50 group hover:border-slate-600 transition-all">
+          <div key={task.id} className={`bg-[#1e293b] p-4 rounded-xl shadow-sm border transition-all ${task.status === 'cancelled' ? 'border-red-900/30 opacity-60' : 'border-slate-700/50 group hover:border-slate-600'}`}>
             <div className="flex justify-between items-start mb-3">
               <div className="flex items-center gap-3 min-w-0">
-                 <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${task.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                    {task.status === 'completed' ? <FolderOpen size={18} /> : <Download size={18} />}
+                 <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${task.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' : task.status === 'cancelled' ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'}`}>
+                    {task.status === 'completed' ? <FolderOpen size={18} /> : task.status === 'cancelled' ? <CircleOff size={18} /> : <Download size={18} />}
                  </div>
                  <div className="min-w-0">
-                    <p className="font-semibold text-sm text-slate-200 truncate pr-2" title={task.fileName}>{task.fileName}</p>
-                    <p className="text-[11px] text-slate-500 font-medium">
+                    <p className={`font-semibold text-sm truncate pr-2 ${task.status === 'cancelled' ? 'text-slate-500 line-through' : 'text-slate-200'}`} title={task.fileName}>{task.fileName}</p>
+                    <p className="text-[11px] text-slate-500 font-medium flex items-center gap-1">
                       {task.status === 'downloading' 
                         ? <span className="text-blue-400">{formatSpeed(task.speed)}</span> 
-                        : <span className="capitalize">{task.status}</span>
-                      } • {formatSize(task.totalSize)}
+                        : <span className={`capitalize ${task.status === 'cancelled' ? 'text-red-400' : ''}`}>{task.status}</span>
+                      } 
+                      <span>•</span> 
+                      <span>{formatSize(task.totalSize)}</span>
                     </p>
                  </div>
               </div>
@@ -138,7 +153,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
                     <Play size={14} />
                   </button>
                 )}
-                {task.status !== 'completed' && (
+                {task.status !== 'completed' && task.status !== 'cancelled' && (
                   <button onClick={() => api.cancelDownload(task.id)} className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-400 hover:text-red-300 transition-colors">
                     <X size={14} />
                   </button>
@@ -163,6 +178,12 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div> Downloaded successfully
               </div>
             )}
+            
+            {task.status === 'cancelled' && (
+              <div className="text-[10px] text-red-400/70 font-medium flex items-center gap-1">
+                 Download cancelled
+              </div>
+            )}
           </div>
         ))}
         
@@ -173,13 +194,6 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ tasks }) => {
         )}
       </div>
     </div>
-
-    {/* Settings Modal triggered from Download Manager - General Mode */}
-    <SettingsModal 
-        isOpen={showSettings} 
-        onClose={() => setShowSettings(false)} 
-        mode="general"
-    />
     </>
   );
 };
