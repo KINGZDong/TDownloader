@@ -38,3 +38,6 @@ backend/_td_files/photos/
 backend/_td_files/videos/
 # Git 会忽略 backend\_td_files\temp 目录下的所有内容
 backend/_td_files/temp/
+
+.env
+.dll
