@@ -620,29 +620,17 @@ io.on('connection', (socket) => {
                             if (!representative) return [];
 
                             try {
-                                // Strategy 1: Standard getMessageGroup
-                                const groupRes = await client.invoke({ 
-                                    _: 'getMessageGroup', 
-                                    chat_id: chatId, 
-                                    message_id: representative.id 
-                                });
-                                
-                                // If we got a good group (>1 items), return it
-                                if (groupRes && groupRes.messages && groupRes.messages.length > 1) {
-                                    return groupRes.messages;
-                                }
-
-                                // Strategy 2: Fallback to History Fetch (Contextual Sync)
-                                // If getMessageGroup returned just the one message (or none), 
-                                // it means TDLib doesn't have the context. Force fetch history surrounding it.
-                                // Offset -10 means "start 10 messages *after* (newer than) this one, and fetch 30".
-                                // This effectively grabs [Newer 10] ... [Target] ... [Older 19]
+                                // Strategy: Use getChatHistory Context Window
+                                // getMessageGroup is NOT supported by some TDLib versions/schemas.
+                                // We use getChatHistory to fetch messages AROUND the representative message.
+                                // offset -9 means: start 9 messages NEWER than the target, and fetch 20 messages OLDER from there.
+                                // This effectively creates a window [target+9 ... target ... target-10]
                                 const historyRes = await client.invoke({
                                     _: 'getChatHistory',
                                     chat_id: chatId,
                                     from_message_id: representative.id,
-                                    offset: -10, 
-                                    limit: 30 
+                                    offset: -9, 
+                                    limit: 20 
                                 });
 
                                 if (historyRes && historyRes.messages) {
