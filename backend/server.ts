@@ -442,6 +442,17 @@ export function mapMessageToFile(message: any): any | null {
   }
 }
 
+// TDLib Search Filter Helper
+function getTdlibFilter(type: string) {
+    switch (type) {
+      case 'Image': return { _: 'searchMessagesFilterPhoto' };
+      case 'Video': return { _: 'searchMessagesFilterVideo' };
+      case 'Document': return { _: 'searchMessagesFilterDocument' };
+      case 'Music': return { _: 'searchMessagesFilterAudio' };
+      default: return { _: 'searchMessagesFilterEmpty' };
+    }
+}
+
 function openFolder(targetPath: string) {
    let p = targetPath;
    if (!fs.existsSync(p)) p = appConfig.downloadPath; 
@@ -540,10 +551,14 @@ io.on('connection', (socket) => {
         if (!client) return;
         currentScanRequestId++;
         const thisRequestId = currentScanRequestId;
+        
+        // Extract parameters
         const chatId = typeof params === 'object' ? params.chatId : params;
         const startDate = typeof params === 'object' ? params.startDate : undefined; 
         const endDate = typeof params === 'object' ? params.endDate : undefined; 
         const limit = (typeof params === 'object' && params.limit) ? params.limit : 0;
+        const query = (typeof params === 'object' && params.query) ? params.query : '';
+        const type = (typeof params === 'object' && params.type) ? params.type : 'All';
 
         try {
              let lastMessageId = 0; 
@@ -552,8 +567,13 @@ io.on('connection', (socket) => {
              const BATCH_SIZE = 100;
 
              socket.emit('scan_progress', { scanned: 0, found: 0, active: true });
+             
+             // --- BRANCHING LOGIC ---
+             // If we have a query OR a specific type filter, use SEARCH
+             // Otherwise use HISTORY (Better for "All" browsing)
+             const useSearch = (query && query.length > 0) || (type && type !== 'All');
 
-             if (endDate) {
+             if (!useSearch && endDate) {
                  try {
                      const seekMsg = await client.invoke({ _: 'getMessageByDate', chat_id: chatId, date: endDate });
                      if (seekMsg && seekMsg.id) lastMessageId = seekMsg.id;
@@ -563,23 +583,50 @@ io.on('connection', (socket) => {
              while (true) {
                  if (thisRequestId !== currentScanRequestId) break;
                  if (limit > 0 && totalFoundFiles >= limit) break;
+                 
+                 let messages = [];
 
-                 const history = await client.invoke({
-                    _: 'getChatHistory',
-                    chat_id: chatId,
-                    limit: BATCH_SIZE,
-                    from_message_id: lastMessageId,
-                    offset: 0,
-                    only_local: false
-                 });
+                 if (useSearch) {
+                     // SERVER-SIDE SEARCH
+                     const result = await client.invoke({
+                         _: 'searchChatMessages',
+                         chat_id: chatId,
+                         query: query || "",
+                         limit: BATCH_SIZE,
+                         from_message_id: lastMessageId,
+                         offset: 0,
+                         filter: getTdlibFilter(type)
+                     });
+                     messages = result.messages || [];
+                     if (messages.length > 0) {
+                         // For search, the next cursor is the last message ID
+                         lastMessageId = messages[messages.length - 1].id;
+                     }
+                 } else {
+                     // STANDARD HISTORY
+                     const history = await client.invoke({
+                        _: 'getChatHistory',
+                        chat_id: chatId,
+                        limit: BATCH_SIZE,
+                        from_message_id: lastMessageId,
+                        offset: 0,
+                        only_local: false
+                     });
+                     messages = history.messages || [];
+                     if (messages.length > 0) {
+                         lastMessageId = messages[messages.length - 1].id;
+                     }
+                 }
 
-                 if (!history.messages || history.messages.length === 0) break;
-                 const oldestInBatch = history.messages[history.messages.length - 1];
-                 const validMessages = history.messages.filter((msg: any) => {
+                 if (messages.length === 0) break;
+
+                 const oldestInBatch = messages[messages.length - 1];
+                 const validMessages = messages.filter((msg: any) => {
                       if (startDate && msg.date < startDate) return false;
                       if (endDate && msg.date > endDate + 86400) return false;
                       return true;
                  });
+                 
                  const filesBatch = validMessages.map(mapMessageToFile).filter((f: any) => f !== null);
                  
                  if (filesBatch.length > 0) {
@@ -590,12 +637,15 @@ io.on('connection', (socket) => {
                       totalFoundFiles += batchToSend.length;
                       socket.emit('files_batch', batchToSend);
                  }
-                 lastMessageId = history.messages[history.messages.length - 1].id;
-                 totalFetched += history.messages.length;
+                 
+                 totalFetched += messages.length;
                  socket.emit('scan_progress', { scanned: totalFetched, found: totalFoundFiles, active: true });
                  
+                 // Break conditions
                  if (startDate && oldestInBatch.date < startDate) break;
                  if (limit > 0 && totalFoundFiles >= limit) break;
+                 if (messages.length < BATCH_SIZE) break; // End of history/results
+
                  await new Promise(r => setTimeout(r, 50));
              }
              if (thisRequestId === currentScanRequestId) {

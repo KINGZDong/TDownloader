@@ -297,6 +297,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   // Filters
   const [filterType, setFilterType] = useState<FileType>(FileType.ALL);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [minSize, setMinSize] = useState(0); // in MB
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
   
@@ -305,6 +306,14 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [endD, setEndD] = useState({y: '', m: '', d: ''});
 
   const activeChat = chats.find(c => c.id === chatId);
+
+  // Debounce logic for search query
+  useEffect(() => {
+    const handler = setTimeout(() => {
+        setDebouncedSearchQuery(searchQuery);
+    }, 500); // 500ms debounce
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
 
   const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number) => {
       if (!chatId) return;
@@ -318,7 +327,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       let endTs = customEnd;
 
       // If no custom dates passed, try to read from state
-      // FIX: Relaxed validation. Allow length >= 1 for month/day.
       if (startTs === undefined && startD.y.length === 4 && startD.m && startD.d) {
            startTs = Math.floor(new Date(parseInt(startD.y), parseInt(startD.m)-1, parseInt(startD.d)).getTime() / 1000);
       }
@@ -329,37 +337,52 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       // Logic:
       // 1. If forceAll is true -> Limit 0 (Unlimited)
       // 2. If dates are provided (filtered) -> Limit 0 (Unlimited)
-      // 3. Default -> Limit 500
+      // 3. If searching or type filtering -> Limit 0 (Server handles searching till limit is hit or done)
+      // 4. Default -> Limit 500
       
       const hasDateFilter = startTs !== undefined || endTs !== undefined;
-      const limit = (forceAll || hasDateFilter) ? 0 : 500;
+      const hasSearch = debouncedSearchQuery.length > 0;
+      const hasTypeFilter = filterType !== FileType.ALL;
+
+      const limit = (forceAll || hasDateFilter || hasSearch || hasTypeFilter) ? 0 : 500;
       
       setIsLimited(limit > 0);
       
-      api.getFiles(chatId, startTs, endTs, limit);
+      // We pass the filter type and search query to backend now
+      api.getFiles(chatId, startTs, endTs, limit, debouncedSearchQuery, filterType);
   };
 
+  // 1. Chat ID changed -> Reset filters and fetch default
   useEffect(() => {
-    // When Chat ID changes, we do a default fetch (Limited 500, no date filters)
     if (chatId) {
         setStartD({y: '', m: '', d: ''});
         setEndD({y: '', m: '', d: ''});
+        setSearchQuery('');
+        setDebouncedSearchQuery('');
+        setFilterType(FileType.ALL);
         
         // Fetch with default 500 limit
         fetchFiles(false, undefined, undefined);
     }
   }, [chatId]); 
 
-  // Auto-fetch when dates become valid
+  // 2. Search Query OR Filter Type Changed -> Re-fetch
+  // Note: We listen to debouncedSearchQuery, not raw searchQuery
   useEffect(() => {
-      // FIX: Relaxed validation to trigger when Year is 4 digits and Month/Day are at least 1 digit
+    if (chatId) {
+        fetchFiles(false);
+    }
+  }, [debouncedSearchQuery, filterType]);
+
+  // 3. Auto-fetch when dates become valid
+  useEffect(() => {
       const startValid = startD.y.length === 4 && startD.m.length >= 1 && startD.d.length >= 1;
       const endValid = endD.y.length === 4 && endD.m.length >= 1 && endD.d.length >= 1;
       
       if (chatId && startValid && endValid) {
           fetchFiles(false); 
       }
-  }, [startD, endD, chatId]);
+  }, [startD, endD]);
 
 
   useEffect(() => {
@@ -393,17 +416,15 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       };
   }, []);
 
-  // Filtering & Grouping Logic
+  // Grouping Logic (Client-side filtering for Type/Search REMOVED)
   const groupedMessages = useMemo(() => {
-    // 1. Filter
+    // We only filter by SIZE here, as Type and Search are handled by backend
     const filtered = files.filter(file => {
-        const matchesType = filterType === FileType.ALL || file.type === filterType;
-        const matchesSearch = file.name.toLowerCase().includes(searchQuery.toLowerCase()) || (file.text && file.text.toLowerCase().includes(searchQuery.toLowerCase()));
         const matchesSize = (file.size / 1024 / 1024) >= minSize;
-        return matchesType && matchesSearch && matchesSize;
+        return matchesSize;
     });
 
-    // 2. Group
+    // Group
     const groups: Record<string, { id: string, files: TdFile[], text?: string, date: number }> = {};
     
     filtered.forEach(file => {
@@ -426,7 +447,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
     });
 
     return Object.values(groups).sort((a, b) => b.date - a.date);
-  }, [files, filterType, searchQuery, minSize]);
+  }, [files, minSize]);
 
 
   const toggleSelection = (id: number) => {
@@ -460,7 +481,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const handleClearDates = () => {
       setStartD({y: '', m: '', d: ''});
       setEndD({y: '', m: '', d: ''});
-      fetchFiles(false, undefined, undefined);
+      // fetchFiles trigger handled by effect, but specific logic might vary, 
+      // effect will see empty dates and do normal fetch
   };
 
   if (!chatId) {
