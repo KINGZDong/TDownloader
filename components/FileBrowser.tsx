@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TdFile, FileType, Chat } from '../types';
-import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal, Layers, AlertCircle, X, ArrowRight } from 'lucide-react';
+import { Search, Filter, Music, Video, Image as ImageIcon, DownloadCloud, CheckSquare, Square, HardDrive, FileText, ArrowDownToLine, Calendar, RefreshCw, Loader2, Save, MoreHorizontal, Layers, AlertCircle, X, ArrowRight, ArrowDown } from 'lucide-react';
 import { api } from '../services/api';
 
 interface FileBrowserProps {
@@ -169,7 +169,8 @@ const MessageCard: React.FC<{
     selectedFiles: number[];
     toggleSelection: (id: number) => void;
     onDownloadFile: (id: number, name: string, size: number) => void;
-}> = ({ group, selectedFiles, toggleSelection, onDownloadFile }) => {
+    forwardRef?: React.Ref<HTMLDivElement>;
+}> = ({ group, selectedFiles, toggleSelection, onDownloadFile, forwardRef }) => {
     
     const handleDownloadAll = () => {
         group.files.forEach(f => onDownloadFile(f.id, f.name, f.size));
@@ -206,7 +207,7 @@ const MessageCard: React.FC<{
     };
 
     return (
-        <div className="bg-[#151e32] border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition-colors animate-fade-in flex flex-col">
+        <div ref={forwardRef} data-date={group.date} className="bg-[#151e32] border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition-colors animate-fade-in flex flex-col mb-4">
             {/* Card Header */}
             <div className="bg-slate-900/50 p-3 flex justify-between items-center border-b border-slate-800/50">
                 <div className="flex items-center gap-3">
@@ -288,37 +289,64 @@ const MessageCard: React.FC<{
     );
 };
 
+// Date Badge Component
+const StickyDateBadge: React.FC<{ date: number | null }> = ({ date }) => {
+    if (!date) return null;
+    const d = new Date(date * 1000);
+    const dateString = d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+    
+    return (
+        <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-40 pointer-events-none animate-fade-in transition-all">
+             <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700 text-slate-300 px-4 py-1.5 rounded-full shadow-xl text-xs font-semibold flex items-center gap-2">
+                 <Calendar size={12} className="text-blue-400" />
+                 {dateString}
+             </div>
+        </div>
+    );
+};
+
 const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
   const [files, setFiles] = useState<TdFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState({ scanned: 0, found: 0, active: false });
-  const [isLimited, setIsLimited] = useState(true);
-  
+  // Used for infinite scroll cursor
+  const [lastMessageId, setLastMessageId] = useState<number>(0); 
+  const [hasMore, setHasMore] = useState(true);
+
   // Filters
   const [filterType, setFilterType] = useState<FileType>(FileType.ALL);
-  const [searchInputValue, setSearchInputValue] = useState(''); // What the user types
-  const [activeSearchQuery, setActiveSearchQuery] = useState(''); // What is actually sent to server
-  const [minSize, setMinSize] = useState(0); // in MB
+  const [searchInputValue, setSearchInputValue] = useState(''); 
+  const [activeSearchQuery, setActiveSearchQuery] = useState(''); 
+  const [minSize, setMinSize] = useState(0); 
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
   
   // Custom Date State
   const [startD, setStartD] = useState({y: '', m: '', d: ''});
   const [endD, setEndD] = useState({y: '', m: '', d: ''});
+  
+  // Sticky Header State
+  const [visibleDate, setVisibleDate] = useState<number | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const activeChat = chats.find(c => c.id === chatId);
 
-  const fetchFiles = (forceAll: boolean = false, customStart?: number, customEnd?: number, overrideQuery?: string, overrideType?: FileType) => {
+  // --- API Methods ---
+  const fetchFiles = (reset: boolean = false, customStart?: number, customEnd?: number, overrideQuery?: string, overrideType?: FileType) => {
       if (!chatId) return;
       
       setLoading(true);
-      setFiles([]); 
-      setSelectedFiles([]);
-      setScanStatus({ scanned: 0, found: 0, active: true });
+      if (reset) {
+          setFiles([]); 
+          setSelectedFiles([]);
+          setLastMessageId(0);
+          setHasMore(true);
+          // Small batch for initial load to be snappy (e.g., 20)
+      }
       
       let startTs = customStart;
       let endTs = customEnd;
 
-      // If no custom dates passed, try to read from state
+      // Date Filters from State
       if (startTs === undefined && startD.y.length === 4 && startD.m && startD.d) {
            startTs = Math.floor(new Date(parseInt(startD.y), parseInt(startD.m)-1, parseInt(startD.d)).getTime() / 1000);
       }
@@ -329,56 +357,44 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       const queryToUse = overrideQuery !== undefined ? overrideQuery : activeSearchQuery;
       const typeToUse = overrideType !== undefined ? overrideType : filterType;
 
-      // Logic:
-      // 1. If forceAll is true -> Limit 0 (Unlimited)
-      // 2. If dates are provided (filtered) -> Limit 0 (Unlimited)
-      // 3. If searching or type filtering -> Limit 0 (Server handles searching till limit is hit or done)
-      // 4. Default -> Limit 500
+      const fromId = reset ? 0 : lastMessageId;
       
-      const hasDateFilter = startTs !== undefined || endTs !== undefined;
-      const hasSearch = queryToUse.length > 0;
-      const hasTypeFilter = typeToUse !== FileType.ALL;
-
-      const limit = (forceAll || hasDateFilter || hasSearch || hasTypeFilter) ? 0 : 500;
+      // Limit 20 per batch for infinite scroll
+      const limit = 20; 
       
-      setIsLimited(limit > 0);
-      
-      // We pass the filter type and search query to backend now
-      api.getFiles(chatId, startTs, endTs, limit, queryToUse, typeToUse);
+      api.on('services/api.ts', () => {}); // dummy ref
+      api.getFiles(chatId, startTs, endTs, limit, queryToUse, typeToUse, fromId);
   };
   
   const handleManualSearch = () => {
       if (!chatId) return;
       setActiveSearchQuery(searchInputValue);
-      fetchFiles(false, undefined, undefined, searchInputValue);
+      fetchFiles(true, undefined, undefined, searchInputValue);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter') {
-          handleManualSearch();
-      }
+      if (e.key === 'Enter') handleManualSearch();
   };
 
-  // 1. Chat ID changed -> Reset filters and fetch default
-  useEffect(() => {
-    if (chatId) {
-        setStartD({y: '', m: '', d: ''});
-        setEndD({y: '', m: '', d: ''});
-        setSearchInputValue('');
-        setActiveSearchQuery('');
-        setFilterType(FileType.ALL);
-        
-        // Fetch with default 500 limit, explicitly overriding type and query to avoid stale state
-        fetchFiles(false, undefined, undefined, '', FileType.ALL);
-    }
-  }, [chatId]); 
+  // --- Effects ---
 
-  // 2. Filter Type Changed -> Re-fetch (keep existing search query if any)
+  // 1. Chat ID changed or Type changed -> Reset and Fetch
   useEffect(() => {
     if (chatId) {
-        fetchFiles(false);
+        // Only reset search inputs on chat change, not type change
+        if (activeSearchQuery === '' && searchInputValue === '') {
+             // Keep filterType as is
+        } else {
+             // Maybe reset search? Optional. Let's keep it clean for new chat
+             if (activeChat?.id !== chatId) {
+                 setSearchInputValue('');
+                 setActiveSearchQuery('');
+             }
+        }
+        
+        fetchFiles(true, undefined, undefined, activeSearchQuery, filterType);
     }
-  }, [filterType]);
+  }, [chatId, filterType]);
 
   // 3. Auto-fetch when dates become valid
   useEffect(() => {
@@ -386,20 +402,24 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
       const endValid = endD.y.length === 4 && endD.m.length >= 1 && endD.d.length >= 1;
       
       if (chatId && startValid && endValid) {
-          fetchFiles(false); 
+          fetchFiles(true); 
       }
   }, [startD, endD]);
 
-
+  // 4. Socket Listeners
   useEffect(() => {
-      // Setup listeners
-      const handleFilesUpdate = (newFiles: TdFile[]) => {
-        setFiles(newFiles);
-        setLoading(false);
-      };
-      
-      // MODIFIED: Deduplication to handle expanded groups from backend
       const handleFilesBatch = (newBatch: TdFile[]) => {
+        setLoading(false);
+        if (newBatch.length === 0) {
+            setHasMore(false);
+            return;
+        }
+
+        // Update cursor for next fetch
+        const lastFile = newBatch[newBatch.length - 1];
+        setLastMessageId(lastFile.messageId);
+
+        // Deduplication & Append
         setFiles(prev => {
             const existingIds = new Set(prev.map(f => f.id));
             const unique = newBatch.filter(f => !existingIds.has(f.id));
@@ -411,25 +431,25 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
           setScanStatus(status);
           if (status.active) setLoading(true);
       };
+      
       const handleFilesEnd = () => {
         setLoading(false);
         setScanStatus(prev => ({ ...prev, active: false }));
+        // If we received an end signal but no files, maybe we are done
       };
 
-      api.on('files_update', handleFilesUpdate);
       api.on('files_batch', handleFilesBatch);
       api.on('scan_progress', handleScanProgress);
       api.on('files_end', handleFilesEnd);
 
       return () => {
-        api.off('files_update', handleFilesUpdate);
         api.off('files_batch', handleFilesBatch);
         api.off('scan_progress', handleScanProgress);
         api.off('files_end', handleFilesEnd);
       };
   }, []);
 
-  // Grouping Logic (Client-side filtering for Type/Search REMOVED)
+  // --- Grouping Logic ---
   const groupedMessages = useMemo(() => {
     // We only filter by SIZE here, as Type and Search are handled by backend
     const filtered = files.filter(file => {
@@ -437,7 +457,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         return matchesSize;
     });
 
-    // Group
     const groups: Record<string, { id: string, files: TdFile[], text?: string, date: number }> = {};
     
     filtered.forEach(file => {
@@ -461,6 +480,43 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
     return Object.values(groups).sort((a, b) => b.date - a.date);
   }, [files, minSize]);
+
+
+  // --- Infinite Scroll & Date Detection ---
+  const handleScroll = () => {
+      if (!scrollContainerRef.current) return;
+      const { scrollTop, scrollHeight, clientHeight, children } = scrollContainerRef.current;
+      
+      // 1. Infinite Load
+      // Trigger when we are 200px from bottom
+      if (scrollHeight - scrollTop - clientHeight < 200) {
+          if (!loading && hasMore && files.length > 0) {
+              fetchFiles(false); // Fetch next page
+          }
+      }
+
+      // 2. Date Detection
+      // Find the message card that is currently near the top of the viewport
+      // We look for elements with data-date attribute
+      // Since children includes other divs, we need to be careful.
+      // A simple strategy: check elements from top.
+      const threshold = scrollTop + 150; // Offset for header
+      let foundDate = null;
+      
+      // We iterate through the groupedMessages to find which one corresponds to the scroll position
+      // NOTE: Direct DOM traversal is more accurate for scroll position mapping
+      const cards = scrollContainerRef.current.querySelectorAll('[data-date]');
+      for (let i = 0; i < cards.length; i++) {
+          const card = cards[i] as HTMLElement;
+          if (card.offsetTop + card.clientHeight > scrollTop + 100) {
+               // This card is visible or just about to be scrolled past
+               foundDate = parseInt(card.getAttribute('data-date') || '0');
+               break; 
+          }
+      }
+      
+      if (foundDate) setVisibleDate(foundDate);
+  };
 
 
   const toggleSelection = (id: number) => {
@@ -510,6 +566,9 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
 
   return (
     <div className="flex-1 flex flex-col h-screen bg-[#0B1120] relative">
+      {/* Sticky Date Badge */}
+      <StickyDateBadge date={visibleDate} />
+
       {/* Glassmorphism Header */}
       <div className="bg-[#0f172a]/90 backdrop-blur-md border-b border-slate-800 px-8 py-5 shadow-sm z-10 sticky top-0 transition-all">
         <div className="flex justify-between items-center mb-6">
@@ -517,19 +576,16 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
              <div>
                 <h2 className="text-2xl font-bold text-slate-100 tracking-tight flex items-center gap-3">
                     {activeChat?.title}
-                    {isLimited && !loading && (
-                        <div className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
-                            <AlertCircle size={10} />
-                            LIMIT 500
-                        </div>
-                    )}
+                    <div className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-1">
+                        HISTORY
+                    </div>
                 </h2>
                 <div className="flex gap-2 text-sm text-slate-500 mt-1 items-center">
-                    <span className="font-medium text-slate-400">{groupedMessages.length}</span> messages shown
+                    <span className="font-medium text-slate-400">{files.length}</span> items loaded
                     {scanStatus.active && (
                         <div className="flex items-center gap-1.5 ml-2 text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full animate-pulse">
                             <Loader2 size={10} className="animate-spin" />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">Scanning...</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider">Loading...</span>
                         </div>
                     )}
                 </div>
@@ -586,7 +642,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
               ))}
             </div>
             
-            {/* Custom Manual Date Picker + Fetch All */}
+            {/* Custom Manual Date Picker */}
             <div className="flex items-center gap-2">
                 <div className="flex items-center gap-2 relative">
                     <DateInput label="Start" value={startD} onChange={setStartD} />
@@ -602,15 +658,6 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
                         </button>
                     )}
                 </div>
-                
-                <button 
-                  onClick={() => fetchFiles(true, undefined, undefined, '')}
-                  className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 p-2 rounded-xl transition-colors flex items-center gap-1.5 shadow-sm ml-4"
-                  title="Ignore limits and fetch complete history"
-                >
-                    <Layers size={16} />
-                    <span className="text-xs font-bold px-1">Load All</span>
-                </button>
             </div>
           </div>
 
@@ -645,13 +692,16 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
         </div>
       </div>
 
-      {/* Message Card List */}
-      <div className="flex-1 overflow-y-auto p-8 custom-scrollbar pb-32 space-y-6">
+      {/* Message Card List (SCROLL CONTAINER) */}
+      <div 
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-8 custom-scrollbar pb-32 space-y-6 scroll-smooth"
+      >
         {files.length === 0 && loading ? (
           <div className="flex flex-col justify-center items-center h-64 animate-fade-in">
             <div className="animate-spin rounded-full h-10 w-10 border-4 border-slate-800 border-t-blue-600 mb-4"></div>
-            <p className="text-slate-500 font-medium">Scanning chat history...</p>
-            {isLimited && <p className="text-slate-600 text-xs mt-2">Fetching recent 500 files</p>}
+            <p className="text-slate-500 font-medium">Fetching history...</p>
           </div>
         ) : groupedMessages.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center h-96 text-slate-500 animate-fade-in">
@@ -673,45 +723,27 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ chatId, chats }) => {
                 />
             ))}
             
-            {loading && (
-                <div className="py-8 flex justify-center items-center gap-3 text-slate-500 animate-pulse">
+            {loading && hasMore && (
+                <div className="py-8 flex justify-center items-center gap-3 text-slate-500">
                     <RefreshCw size={18} className="animate-spin" />
-                    <span className="text-sm font-medium">Scanning for more messages...</span>
+                    <span className="text-sm font-medium">Loading older messages...</span>
                 </div>
             )}
             
-            {/* Limit reached indicator at bottom */}
-            {!loading && isLimited && (
-                <div className="py-8 flex flex-col justify-center items-center gap-2 text-slate-500 border-t border-slate-800/50 mt-4 pt-8">
-                     <AlertCircle size={24} className="text-slate-600" />
-                     <p className="text-sm font-medium">Showing recent 500 files</p>
-                     <button 
-                        onClick={() => fetchFiles(true)}
-                        className="text-blue-400 hover:text-blue-300 text-xs font-bold uppercase tracking-wider hover:underline"
-                     >
-                        Click here to Load All History
-                     </button>
+            {!hasMore && groupedMessages.length > 0 && (
+                <div className="py-8 text-center text-slate-600 text-sm border-t border-slate-800/50 mt-4">
+                     End of history
                 </div>
             )}
           </>
         )}
       </div>
       
-      {/* Floating Scan Progress Bar (Fixed Bottom Center) */}
-      {scanStatus.active && (
-         <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700 text-slate-200 px-6 py-3 rounded-full shadow-2xl z-30 flex items-center gap-4 animate-fade-in">
-             <div className="flex items-center gap-2">
-                 <Loader2 size={16} className="text-blue-400 animate-spin" />
-                 <span className="text-sm font-semibold">Scanning</span>
-             </div>
-             <div className="h-4 w-px bg-slate-700"></div>
-             <div className="text-xs space-x-3">
-                 <span><span className="text-blue-400 font-bold">{scanStatus.scanned}</span> analyzed</span>
-                 <span className="text-slate-600">•</span>
-                 <span><span className="text-emerald-400 font-bold">{scanStatus.found}</span> found</span>
-                 {isLimited && <span className="text-amber-500/50 ml-2 text-[10px] uppercase font-bold tracking-wider">Limit: 500</span>}
-             </div>
-         </div>
+      {/* Scroll Down Hint (if content exists but user is at top) */}
+      {files.length > 0 && !loading && (
+           <div className="absolute bottom-6 right-8 pointer-events-none opacity-50">
+               {/* Just a visual balance, maybe not needed if scrollbar is obvious */}
+           </div>
       )}
     </div>
   );

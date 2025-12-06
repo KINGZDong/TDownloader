@@ -610,29 +610,30 @@ io.on('connection', (socket) => {
         const endDate = typeof params === 'object' ? params.endDate : undefined; 
         const limit = (typeof params === 'object' && params.limit) ? params.limit : 0;
         const rawQuery = (typeof params === 'object' && params.query) ? params.query : '';
-        const query = rawQuery.trim(); // TRIMMED
+        const fromMessageId = (typeof params === 'object' && params.fromMessageId) ? params.fromMessageId : 0;
+        
+        const query = rawQuery.trim(); 
         const type = (typeof params === 'object' && params.type) ? params.type : 'All';
 
         try {
-             let lastMessageId = 0; 
+             let lastMessageId = fromMessageId; 
              let totalFetched = 0;
              let totalFoundFiles = 0;
-             const BATCH_SIZE = 100;
+             const BATCH_SIZE = 50; 
 
              socket.emit('scan_progress', { scanned: 0, found: 0, active: true });
              
-             // --- BRANCHING LOGIC ---
-             // If we have a query OR a specific type filter, use SEARCH
-             // Otherwise use HISTORY (Better for "All" browsing)
              const useSearch = (query && query.length > 0) || (type && type !== 'All');
 
-             if (!useSearch && endDate) {
+             if (!useSearch && endDate && lastMessageId === 0) {
                  try {
                      const seekMsg = await client.invoke({ _: 'getMessageByDate', chat_id: chatId, date: endDate });
                      if (seekMsg && seekMsg.id) lastMessageId = seekMsg.id;
                  } catch {}
              }
 
+             // We only run this loop ONCE or TWICE for pagination, rather than infinitely.
+             // Frontend controls the "Next Page" by sending the lastMessageId.
              while (true) {
                  if (thisRequestId !== currentScanRequestId) break;
                  if (limit > 0 && totalFoundFiles >= limit) break;
@@ -658,25 +659,16 @@ io.on('connection', (socket) => {
                         
                         // GROUP EXPANSION LOGIC
                         const groupIdsToFetch = new Set<string>();
-                        
-                        // 1. Identify all albums in this batch
                         for(const msg of rawMessages) {
                             if(msg.media_album_id && msg.media_album_id !== "0") {
                                 groupIdsToFetch.add(msg.media_album_id);
                             }
                         }
                         
-                        // 2. Fetch full groups (siblings) ROBUSTLY
                         const groupPromises = Array.from(groupIdsToFetch).map(async (gid) => {
                             const representative = rawMessages.find((m: any) => m.media_album_id === gid);
                             if (!representative) return [];
-
                             try {
-                                // Strategy: Use getChatHistory Context Window
-                                // getMessageGroup is NOT supported by some TDLib versions/schemas.
-                                // We use getChatHistory to fetch messages AROUND the representative message.
-                                // offset -9 means: start 9 messages NEWER than the target, and fetch 20 messages OLDER from there.
-                                // This effectively creates a window [target+9 ... target ... target-10]
                                 const historyRes = await client.invoke({
                                     _: 'getChatHistory',
                                     chat_id: chatId,
@@ -684,34 +676,21 @@ io.on('connection', (socket) => {
                                     offset: -9, 
                                     limit: 20 
                                 });
-
                                 if (historyRes && historyRes.messages) {
-                                    // Filter the history chunk for just the album we care about
                                     return historyRes.messages.filter((m: any) => m.media_album_id === gid);
                                 }
-                                
                                 return [];
-                            } catch (e: any) {
-                                console.warn(`Failed to expand group ${gid}:`, e.message || e);
-                                return [];
-                            }
+                            } catch (e: any) { return []; }
                         });
                         
                         const groupResults = await Promise.all(groupPromises);
                         const allGroupMessages = groupResults.flat();
                         
-                        // 3. Merge: Original Search Results + Expanded Group Files
                         const uniqueMap = new Map();
-                        
-                        // First add ALL raw search results (ensures nothing is lost if group fetch fails)
                         rawMessages.forEach((m: any) => uniqueMap.set(m.id, m));
-                        
-                        // Then add/overwrite with complete group info
                         allGroupMessages.forEach((m: any) => uniqueMap.set(m.id, m));
                         
                         messagesToProcess = Array.from(uniqueMap.values());
-                        
-                        // Sort by date descending (UI also sorts, but good for consistency)
                         messagesToProcess.sort((a: any, b: any) => b.date - a.date);
                      } else {
                         messagesToProcess = [];
@@ -761,7 +740,14 @@ io.on('connection', (socket) => {
                  if (limit > 0 && totalFoundFiles >= limit) break;
                  if (rawMessages.length < BATCH_SIZE) break; // End of history/results
 
-                 await new Promise(r => setTimeout(r, 50));
+                 // If we have found enough files to satisfy this specific pagination request, break.
+                 // This makes the UI feel snappier.
+                 if (limit > 0 && totalFoundFiles >= limit) break; 
+                 
+                 // If totalFetched is getting too high without finding anything (sparse files), let's yield back to frontend eventually
+                 // But for infinite scroll, we usually want to keep searching until we find *something* or hit the limit.
+                 
+                 await new Promise(r => setTimeout(r, 20));
              }
              if (thisRequestId === currentScanRequestId) {
                   socket.emit('scan_progress', { scanned: totalFetched, found: totalFoundFiles, active: false });

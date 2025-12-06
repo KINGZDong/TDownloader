@@ -159,8 +159,8 @@ class ApiService {
     this.socket.emit('get_chats');
   }
 
-  async getFiles(chatId: number, startDate?: number, endDate?: number, limit?: number, query?: string, type?: string): Promise<void> {
-    this.socket.emit('get_files', { chatId, startDate, endDate, limit, query, type });
+  async getFiles(chatId: number, startDate?: number, endDate?: number, limit?: number, query?: string, type?: string, fromMessageId?: number): Promise<void> {
+    this.socket.emit('get_files', { chatId, startDate, endDate, limit, query, type, fromMessageId });
   }
 
   // Request a high-quality thumbnail (not the minithumbnail)
