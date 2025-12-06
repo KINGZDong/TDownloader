@@ -64,3 +64,13 @@ export interface ProxyConfig {
 export interface ConnectionState {
   state: 'waiting_for_network' | 'connecting_to_proxy' | 'connecting' | 'updating' | 'ready' | 'unknown';
 }
+
+export interface SavedSession {
+  id: string; // unique session folder name
+  firstName: string;
+  lastName?: string;
+  username?: string;
+  phoneNumber?: string;
+  avatar?: string; // base64
+  lastActive: number;
+}

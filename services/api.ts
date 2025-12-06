@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { AuthState, Chat, TdFile, DownloadTask, ProxyConfig } from '../types';
+import { AuthState, Chat, TdFile, DownloadTask, ProxyConfig, SavedSession } from '../types';
 
 class ApiService {
   private socket: Socket;
@@ -71,6 +71,10 @@ class ApiService {
       this.emitEvent('directory_selected', path);
     });
 
+    this.socket.on('sessions_list_update', (sessions: SavedSession[]) => {
+      this.emitEvent('sessions_list_update', sessions);
+    });
+
     this.socket.on('error', (err: string) => {
       console.error('Backend error:', err);
       alert('Backend Error: ' + err);
@@ -100,6 +104,28 @@ class ApiService {
     this.socket.emit('get_auth_state');
   }
 
+  // Session Management
+  async getSavedAccounts(): Promise<void> {
+    this.socket.emit('get_saved_accounts');
+  }
+
+  async loginSession(sessionId: string): Promise<void> {
+    this.socket.emit('login_session', sessionId);
+  }
+
+  async createNewSession(): Promise<void> {
+    this.socket.emit('create_new_session');
+  }
+
+  async removeSession(sessionId: string): Promise<void> {
+    this.socket.emit('remove_session', sessionId);
+  }
+
+  async switchAccount(): Promise<void> {
+      // Tells backend to stop current client but NOT delete data, effectively returning to "Select Account"
+      this.socket.emit('switch_account_disconnect');
+  }
+
   async sendPhoneNumber(phone: string): Promise<void> {
     this.socket.emit('login_phone', phone);
   }
@@ -117,8 +143,9 @@ class ApiService {
   }
 
   async logout(): Promise<void> {
-    this.socket.emit('logout');
-    localStorage.removeItem('td_auth_state');
+    // Legacy logout - maps to remove current session
+    // But now we usually want switchAccount
+    this.socket.emit('logout'); 
     window.location.reload();
   }
 

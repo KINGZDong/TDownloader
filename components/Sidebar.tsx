@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Chat } from '../types';
-import { Search, LogOut, User, Users, Megaphone, Hash, Settings } from 'lucide-react';
+import { Search, LogOut, User, Users, Megaphone, Hash, Settings, UserPlus, Users2 } from 'lucide-react';
 import { api } from '../services/api';
 
 interface SidebarProps {
@@ -57,11 +57,11 @@ const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onSelectChat, cu
             <span className="font-bold text-white text-lg tracking-tight">Downloader</span>
           </div>
           <button 
-            onClick={() => api.logout()} 
-            className="p-2 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-red-400 transition-all duration-200"
-            title="Logout"
+            onClick={() => api.switchAccount()} 
+            className="p-2 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-white transition-all duration-200"
+            title="Switch Account"
           >
-            <LogOut size={18} />
+            <Users2 size={18} />
           </button>
         </div>
         
